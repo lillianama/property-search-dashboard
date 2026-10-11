@@ -9,6 +9,7 @@ import {
   applyLocalFunnelState,
   EMPTY_LOCAL_FUNNEL_STATE,
   FUNNEL_BUCKET_LABELS,
+  groupByBucket,
   type FunnelAction,
   type LocalFunnelState,
 } from "../../lib/funnel";
@@ -325,6 +326,30 @@ export function Dashboard({
     [load],
   );
 
+  const bottomMovePending = useRef(false);
+  const [bottomMoveBusy, setBottomMoveBusy] = useState(false);
+  const moveToWatchlistBottom = useCallback(async (house: HouseRecord) => {
+    if (bottomMovePending.current) return;
+    bottomMovePending.current = true;
+    setBottomMoveBusy(true);
+    try {
+      // Use the whole track so hidden/filtered-out properties still count.
+      const res = await fetch(trackUrl("/api/dashboard", track), { cache: "no-store" });
+      if (!res.ok) throw new Error("Could not load the full watchlist");
+      const fresh = await res.json() as DashboardResponse;
+      if (!mountedRef.current) return;
+      const all = applyLocalFunnelState(fresh.properties, localFunnel);
+      const rows = groupByBucket(all, localFunnel.placements).watchlist.filter((row) => row.id !== house.id);
+      const last = rows.at(-1);
+      if (last) await requestMove(house, "watchlist", { placement: { afterId: last.id, beforeId: null } });
+    } catch {
+      if (mountedRef.current) setAnnouncement(`Could not move ${house.address} to the bottom. The change was not saved.`);
+    } finally {
+      bottomMovePending.current = false;
+      if (mountedRef.current) setBottomMoveBusy(false);
+    }
+  }, [track, localFunnel, requestMove]);
+
   return (
     <>
       <header className="dashboard-header">
@@ -415,6 +440,8 @@ export function Dashboard({
                   properties={visibleProperties}
                   placements={localFunnel.placements}
                   onMove={requestMove}
+                  onWatchlistBottom={moveToWatchlistBottom}
+                  bottomMoveBusy={bottomMoveBusy}
                   pitiAssumptions={pitiAssumptions}
                   onEditNotes={(house) => onOpenEditor(house.id)}
                   highlightId={highlightRowId}
