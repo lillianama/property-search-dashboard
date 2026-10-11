@@ -1,0 +1,39 @@
+name: real-estate-dashboard
+services:
+  web:
+    build:
+      context: .
+      target: runner
+    ports:
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      GOOGLE_CLOUD_API_KEY: ${GOOGLE_CLOUD_API_KEY:-}
+      REAL_ESTATE_DASHBOARD_PITI_STORAGE_KEY: ${REAL_ESTATE_DASHBOARD_PITI_STORAGE_KEY:-}
+      MARKET_PREF_MAX_PRICE: ${MARKET_PREF_MAX_PRICE:-480000}
+      MARKET_PREF_MIN_YEAR_BUILT: ${MARKET_PREF_MIN_YEAR_BUILT:-1900}
+      MARKET_PREF_MAX_YEAR_BUILT: ${MARKET_PREF_MAX_YEAR_BUILT:-1965}
+      NEXT_TELEMETRY_DISABLED: "1"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+  market-ingest:
+    profiles: [market-ingest]
+    build:
+      context: .
+      target: ingest
+    environment:
+      DATABASE_URL: ${MARKET_DATABASE_URL:-}
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
