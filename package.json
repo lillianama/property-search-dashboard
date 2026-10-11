@@ -1,0 +1,36 @@
+{
+  "name": "property-search-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "vitest run",
+    "ingest": "node scripts/ingest-zillow.mjs",
+    "typecheck": "tsc --noEmit",
+    "schema:base": "node scripts/apply-property-store-schema.mjs",
+    "schema:editor": "node scripts/apply-editor-schema.mjs",
+    "schema:rank-prefs": "node scripts/apply-rank-prefs-schema.mjs",
+    "schema:market": "node scripts/apply-market-schema.mjs"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "maplibre-gl": "^5.24.0",
+    "next": "^16.2.10",
+    "pg": "^8.22.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "postcss": "^8.5.10"
+  }
+}

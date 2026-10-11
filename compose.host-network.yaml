@@ -1,0 +1,14 @@
+# Optional deployment override for a trusted host-network proxy.
+# Configure WEB_HOSTNAME with a private host interface and WEB_PORT with an
+# unoccupied port. Do not bind this listener to a public/LAN interface.
+services:
+  market-ingest:
+    network_mode: host
+  web:
+    network_mode: host
+    ports: !reset []
+    environment:
+      HOSTNAME: ${WEB_HOSTNAME:?Set WEB_HOSTNAME to a private host interface}
+      PORT: ${WEB_PORT:-3000}
+    healthcheck:
+      test: [CMD, node, -e, "fetch(`http://$${process.env.HOSTNAME}:$${process.env.PORT}/api/health`).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
