@@ -11,7 +11,7 @@ export const DEFAULT_TAB: TabId = "market";
 
 export type HousesView = "map" | "list";
 
-export const DEFAULT_HOUSES_VIEW: HousesView = "map";
+export const DEFAULT_HOUSES_VIEW: HousesView = "list";
 
 /** The filter form exactly as typed (strings, not parsed numbers). Kept
  * here so both the FiltersBar component and URL round-tripping share one

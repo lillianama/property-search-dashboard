@@ -29,11 +29,14 @@ export function RejectPropertyDialog({
   useEffect(() => {
     restoreFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    inputRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    inputRef.current?.focus({ preventScroll: true });
     return () => {
+      document.body.style.overflow = previousOverflow;
       // The originating quick view may already be gone; focusing a
       // detached element is a harmless no-op.
-      restoreFocusRef.current?.focus();
+      restoreFocusRef.current?.focus({ preventScroll: true });
     };
   }, []);
 
@@ -73,7 +76,7 @@ export function RejectPropertyDialog({
         aria-describedby="reject-dialog-description"
       >
         <h2 id="reject-dialog-title" className="reject-dialog-title">
-          Reject this house?
+          Reject this property?
         </h2>
         <p id="reject-dialog-description" className="reject-dialog-description">
           <strong>{house.address}</strong> leaves My Search immediately and lives on in the Rejected tab{" "}

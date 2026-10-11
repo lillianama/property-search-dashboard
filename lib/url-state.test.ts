@@ -38,6 +38,15 @@ describe("serializeAppUrlState / parseAppUrlState", () => {
     expect(parsed).toEqual(original);
   });
 
+  it("defaults both tracks to list but retains explicitly requested maps", () => {
+    for (const track of ["house", "plex"]) {
+      expect(parseAppUrlState(`?track=${track}&tab=search`).view).toBe("list");
+      const map = parseAppUrlState(`?track=${track}&tab=search&view=map`);
+      expect(map.view).toBe("map");
+      expect(parseAppUrlState(serializeAppUrlState(map))).toEqual(map);
+    }
+  });
+
   it("accepts search strings with or without the leading question mark", () => {
     expect(parseAppUrlState("?tab=rejected").tab).toBe("rejected");
     expect(parseAppUrlState("tab=rejected").tab).toBe("rejected");
@@ -46,7 +55,7 @@ describe("serializeAppUrlState / parseAppUrlState", () => {
   it("falls back to defaults on malformed or unknown values", () => {
     const parsed = parseAppUrlState("?tab=bogus&view=cube&edit=");
     expect(parsed.tab).toBe("market");
-    expect(parsed.view).toBe("map");
+    expect(parsed.view).toBe("list");
     expect(parsed.editingId).toBeNull();
   });
 
