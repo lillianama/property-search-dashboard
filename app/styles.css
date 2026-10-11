@@ -1769,6 +1769,10 @@ a.funnel-row-address:hover {
 button:hover:not(:disabled) { transform: translateY(-1px); }
 button:active:not(:disabled) { transform: translateY(0); }
 .funnel-quick-move {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   background: linear-gradient(120deg, #eee1fa, #f9effa);
   border-color: #ccb0e4;
   color: #60358b;
@@ -1787,4 +1791,13 @@ button:active:not(:disabled) { transform: translateY(0); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
   button:hover:not(:disabled) { transform: none; }
+}
+
+.quick-move-icon {
+  flex-shrink: 0;
+  transition: transform 200ms ease;
+}
+.funnel-quick-move:hover .quick-move-icon { transform: rotate(-8deg) scale(1.08); }
+@media (prefers-reduced-motion: reduce) {
+  .funnel-quick-move:hover .quick-move-icon { transform: none; }
 }
