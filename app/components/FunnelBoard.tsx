@@ -75,6 +75,8 @@ export function FunnelBoard({
   properties,
   placements,
   onMove,
+  onWatchlistBottom,
+  bottomMoveBusy = false,
   pitiAssumptions,
   onEditNotes,
   highlightId = null,
@@ -86,6 +88,8 @@ export function FunnelBoard({
     action: FunnelAction,
     options?: { note?: string | null; placement?: MovePlacement },
   ) => void;
+  onWatchlistBottom: (house: HouseRecord) => void;
+  bottomMoveBusy?: boolean;
   pitiAssumptions: PitiAssumptions;
   onEditNotes: (house: HouseRecord) => void;
   /** Row to briefly highlight (editor-close return cue); null = none. */
@@ -406,6 +410,8 @@ export function FunnelBoard({
                     onDragEnd={clearDrag}
                     onReject={() => setPendingReject({ house: entry })}
                     onEditNotes={() => onEditNotes(entry)}
+                    onBottom={bucket === "watchlist" ? () => onWatchlistBottom(entry) : undefined}
+                    bottomMoveBusy={bottomMoveBusy}
                     onQuickMove={bucket === "watchlist" ? (target) => commitMove(entry, target, 0) : undefined}
                   />
                 </li>
@@ -609,6 +615,8 @@ function FunnelRow({
   onReject,
   onEditNotes,
   onQuickMove,
+  onBottom,
+  bottomMoveBusy,
 }: {
   house: HouseRecord;
   pitiAssumptions: PitiAssumptions;
@@ -623,6 +631,8 @@ function FunnelRow({
   onReject: () => void;
   onEditNotes: () => void;
   onQuickMove?: (bucket: "to-tour" | "top-contenders") => void;
+  onBottom?: () => void;
+  bottomMoveBusy: boolean;
 }) {
   const status = house.displayStatus;
   const track = useTrack();
@@ -708,6 +718,14 @@ function FunnelRow({
             <QuickMoveIcon kind="contender" /> Top contender
           </button>
         </>}
+        {onBottom && <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
+          onClick={onBottom} disabled={bottomMoveBusy} aria-label={`Move ${house.address} to bottom of Watchlist`}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+            <path d="M12 3v12m-4-4 4 4 4-4M5 21h14" />
+          </svg>
+          To bottom
+        </button>}
 
         <button
           type="button"
