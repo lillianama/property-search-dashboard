@@ -55,7 +55,7 @@ export function HistoryChart({ data }: { data: HistoryChartPoint[] }) {
             position: "left",
             beginAtZero: true,
             title: { display: true, text: "Events" },
-            grid: { color: "rgba(255,255,255,0.06)" },
+            grid: { color: "rgba(83,49,115,0.12)" },
           },
           price: {
             type: "linear",
@@ -65,11 +65,11 @@ export function HistoryChart({ data }: { data: HistoryChartPoint[] }) {
             grid: { display: false },
           },
           x: {
-            grid: { color: "rgba(255,255,255,0.04)" },
+            grid: { color: "rgba(83,49,115,0.08)" },
           },
         },
         plugins: {
-          legend: { labels: { color: "#d8d4e6" } },
+          legend: { labels: { color: "#51405f" } },
         },
       },
     });

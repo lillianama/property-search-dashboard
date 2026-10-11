@@ -52,7 +52,7 @@ export function PriceDistributionChart({ data }: { data: PriceBucket[] }) {
           },
         },
         scales: {
-          y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: "rgba(255,255,255,0.06)" } },
+          y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: "rgba(83,49,115,0.12)" } },
           x: { grid: { display: false }, ticks: { maxRotation: 60, autoSkip: true } },
         },
       },

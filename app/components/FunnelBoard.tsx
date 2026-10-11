@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ACTION_EDIT_CLASS, ACTION_REJECT_CLASS } from "../../lib/action-styles";
 import { createAutoscroller, type Autoscroller } from "../../lib/drag-autoscroll";
-import { MAX_REJECTION_NOTE_LENGTH, sanitizeRejectionNote } from "../../lib/rejection";
 import {
   FUNNEL_BUCKETS,
   FUNNEL_BUCKET_LABELS,
@@ -15,6 +14,7 @@ import { formatCurrency, formatDate, formatNumber, formatYear } from "../../lib/
 import { computePiti, type PitiAssumptions } from "../../lib/piti";
 import type { FunnelBucket, HouseRecord, QuickJudgments, TriStateJudgment } from "../../lib/types";
 import { PlexUnits } from "./PlexUnits";
+import { RejectPropertyDialog } from "./RejectPropertyDialog";
 import { useTrack } from "./TrackContext";
 import { PropertyPhoto } from "./PropertyPhoto";
 
@@ -100,7 +100,6 @@ export function FunnelBoard({
   const [pendingReject, setPendingReject] = useState<PendingReject | null>(null);
   const [keyboardDrag, setKeyboardDrag] = useState<KeyboardDrag | null>(null);
   const [kbAnnouncement, setKbAnnouncement] = useState("");
-  const rejectNoteRef = useRef<HTMLInputElement | null>(null);
   const handleRefs = useRef(new Map<string, HTMLButtonElement>());
 
   /** Rows of one bucket without the actively dragged row, i.e. the list an
@@ -407,6 +406,7 @@ export function FunnelBoard({
                     onDragEnd={clearDrag}
                     onReject={() => setPendingReject({ house: entry })}
                     onEditNotes={() => onEditNotes(entry)}
+                    onQuickMove={bucket === "watchlist" ? (target) => commitMove(entry, target, 0) : undefined}
                   />
                 </li>
               ),
@@ -429,39 +429,18 @@ export function FunnelBoard({
           </p>
         </header>
 
-        {pendingReject && (
-          <div className="funnel-reject-confirm" role="alertdialog" aria-label="Confirm rejection">
-            <p className="funnel-reject-question">
-              Reject <strong>{pendingReject.house.address}</strong>? It will move to the Rejected archive.
-            </p>
-            <label className="funnel-reject-note-label">
-              Reason (optional)
-              <input
-                ref={rejectNoteRef}
-                type="text"
-                maxLength={MAX_REJECTION_NOTE_LENGTH}
-                placeholder="e.g. Too close to the highway"
-              />
-            </label>
-            <div className="funnel-reject-actions">
-              <button
-                type="button"
-                className={`btn-secondary ${ACTION_REJECT_CLASS}`}
-                onClick={() => {
-                  const note = sanitizeRejectionNote(rejectNoteRef.current?.value ?? "");
-                  onMove(pendingReject.house, "reject", { note });
-                  setPendingReject(null);
-                }}
-              >
-                Reject property
-              </button>
-              <button type="button" className="btn-secondary" onClick={() => setPendingReject(null)}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
+
       </section>
+      {pendingReject && (
+        <RejectPropertyDialog
+          house={pendingReject.house}
+          onConfirm={(note) => {
+            onMove(pendingReject.house, "reject", { note });
+            setPendingReject(null);
+          }}
+          onCancel={() => setPendingReject(null)}
+        />
+      )}
     </div>
   );
 }
@@ -629,6 +608,7 @@ function FunnelRow({
   onDragEnd,
   onReject,
   onEditNotes,
+  onQuickMove,
 }: {
   house: HouseRecord;
   pitiAssumptions: PitiAssumptions;
@@ -642,6 +622,7 @@ function FunnelRow({
   onDragEnd: () => void;
   onReject: () => void;
   onEditNotes: () => void;
+  onQuickMove?: (bucket: "to-tour" | "top-contenders") => void;
 }) {
   const status = house.displayStatus;
   const track = useTrack();
@@ -717,6 +698,17 @@ function FunnelRow({
       </div>
 
       <div className="funnel-row-actions">
+        {onQuickMove && <>
+          <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
+            onClick={() => onQuickMove("to-tour")} aria-label={`Move ${house.address} to To tour`}>
+            To tour
+          </button>
+          <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
+            onClick={() => onQuickMove("top-contenders")} aria-label={`Move ${house.address} to Top contenders`}>
+            Top contender
+          </button>
+        </>}
+
         <button
           type="button"
           className={`btn-secondary funnel-row-action ${ACTION_EDIT_CLASS}`}

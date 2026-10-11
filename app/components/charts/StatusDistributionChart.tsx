@@ -91,7 +91,7 @@ export function StatusDistributionChart({ data }: { data: StatusCount[] }) {
           {
             data: data.map((d) => d.count),
             backgroundColor: data.map((d) => colorFor(d.status)),
-            borderColor: "#0a0714",
+            borderColor: "#ffffff",
             borderWidth: 2,
           },
         ],
@@ -100,7 +100,7 @@ export function StatusDistributionChart({ data }: { data: StatusCount[] }) {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { position: "bottom", labels: { color: "#d8d4e6" } },
+          legend: { position: "bottom", labels: { color: "#51405f" } },
         },
       },
       plugins: [wedgeCountLabels],

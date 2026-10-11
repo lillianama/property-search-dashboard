@@ -35,7 +35,7 @@ describe("map quick-view reject flow", () => {
     expect(dialog).toContain("MAX_REJECTION_NOTE_LENGTH");
     expect(dialog).toContain("sanitizeRejectionNote");
     expect(dialog).toContain('event.key === "Escape"');
-    expect(dialog).toContain("inputRef.current?.focus()");
+    expect(dialog).toContain("inputRef.current?.focus({ preventScroll: true })");
     // It renders no fetch of its own — persistence stays with the parent's
     // shared workflow.
     expect(dialog).not.toContain("fetch(");

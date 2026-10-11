@@ -46,10 +46,10 @@ export function MarketTrendChart({ label, unit, points }: MarketTrendChartProps)
           y: {
             beginAtZero: unit === "count",
             title: { display: true, text: unit === "usd" ? "USD" : "Listings" },
-            grid: { color: "rgba(255,255,255,0.06)" },
+            grid: { color: "rgba(83,49,115,0.12)" },
           },
           x: {
-            grid: { color: "rgba(255,255,255,0.04)" },
+            grid: { color: "rgba(83,49,115,0.08)" },
             ticks: { maxTicksLimit: 12 },
           },
         },
