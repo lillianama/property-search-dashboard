@@ -14,6 +14,8 @@ import {
 import { formatCurrency, formatDate, formatNumber, formatYear } from "../../lib/format";
 import { computePiti, type PitiAssumptions } from "../../lib/piti";
 import type { FunnelBucket, HouseRecord, QuickJudgments, TriStateJudgment } from "../../lib/types";
+import { PlexUnits } from "./PlexUnits";
+import { useTrack } from "./TrackContext";
 import { PropertyPhoto } from "./PropertyPhoto";
 
 const FLAG_LABELS: Record<HouseRecord["bedroomSizeFlag"], string> = {
@@ -642,6 +644,7 @@ function FunnelRow({
   onEditNotes: () => void;
 }) {
   const status = house.displayStatus;
+  const track = useTrack();
 
   return (
     <article
@@ -704,6 +707,8 @@ function FunnelRow({
         <div className="funnel-row-line funnel-row-facts">
           <NeighborhoodLine house={house} />
         </div>
+
+        <PlexUnits track={track} summary={house.plexUnits} />
 
         <div className="funnel-row-line funnel-row-meta">
           <PitiEstimate house={house} assumptions={pitiAssumptions} />

@@ -1753,3 +1753,8 @@ a.funnel-row-address:hover {
     animation-iteration-count: 1 !important;
   }
 }
+
+.plex-units { margin: .5rem 0; padding: .65rem; border: 1px solid var(--border); border-radius: .4rem; font-size: .85rem; }
+.plex-units p { margin: .35rem 0; }
+.plex-units ul { margin: .4rem 0; padding-left: 1.2rem; }
+.plex-units li + li { margin-top: .5rem; }
