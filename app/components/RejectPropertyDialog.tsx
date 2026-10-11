@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ACTION_REJECT_CLASS } from "../../lib/action-styles";
 import { MAX_REJECTION_NOTE_LENGTH, sanitizeRejectionNote } from "../../lib/rejection";
 import type { HouseRecord } from "../../lib/types";
@@ -29,6 +29,8 @@ export function RejectPropertyDialog({
   onConfirm: (note: string | null) => void;
   onCancel: () => void;
 }) {
+  const [reasonText, setReasonText] = useState("");
+  const reasonParts = reasonText.split(";").map((part) => part.trim()).filter(Boolean);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
@@ -89,13 +91,17 @@ export function RejectPropertyDialog({
           <strong>{house.address}</strong> leaves My Search immediately and lives on in the Rejected tab{" "}
           {"\u2014"} nothing is deleted, its ranking is remembered, and a later reconsideration brings it back.
         </p>
-        <div className="reject-quick-reasons" role="group" aria-label="Reject immediately with a common reason">
-          <p className="reject-quick-hint">One click saves the reason and rejects.</p>
+        <div className="reject-quick-reasons" role="group" aria-label="Select rejection reasons">
+          <p className="reject-quick-hint">Select any reasons, then press Reject property. Click again to remove.</p>
           {QUICK_REJECTION_REASONS.map((reason) => (
             <button key={reason} type="button" className="btn-secondary reject-reason-button"
+              aria-pressed={reasonParts.includes(reason)}
+              disabled={!reasonParts.includes(reason) && [...reasonParts, reason].join("; ").length > MAX_REJECTION_NOTE_LENGTH}
               onClick={() => {
-                if (inputRef.current) inputRef.current.value = reason;
-                onConfirm(sanitizeRejectionNote(reason));
+                setReasonText((current) => {
+                  const parts = current.split(";").map((part) => part.trim()).filter(Boolean);
+                  return (parts.includes(reason) ? parts.filter((part) => part !== reason) : [...parts, reason]).join("; ");
+                });
               }}>
               {reason}
             </button>
@@ -105,14 +111,16 @@ export function RejectPropertyDialog({
           className="reject-dialog-form"
           onSubmit={(event) => {
             event.preventDefault();
-            onConfirm(sanitizeRejectionNote(inputRef.current?.value ?? ""));
+            onConfirm(sanitizeRejectionNote(reasonText));
           }}
         >
           <label className="funnel-reject-note-label">
-            Or write your own reason (optional)
+            Reason (editable, optional)
             <input
               ref={inputRef}
               type="text"
+              value={reasonText}
+              onChange={(event) => setReasonText(event.target.value)}
               maxLength={MAX_REJECTION_NOTE_LENGTH}
               placeholder="e.g. Too close to the highway"
             />

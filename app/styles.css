@@ -1822,3 +1822,10 @@ button:active:not(:disabled) { transform: translateY(0); }
   line-height: 1.35;
 }
 .reject-reason-button:hover { background: #ebdaf8; border-color: var(--accent); }
+
+.reject-reason-button[aria-pressed="true"] {
+  background: linear-gradient(125deg, #8050ba, #66329e);
+  border-color: #63318e;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(101, 51, 166, 0.18);
+}
