@@ -10,8 +10,8 @@ import { DbUnavailableBanner, LoadErrorBanner } from "./StatusBanners";
 import { MarketTrendChart } from "./charts/MarketTrendChart";
 
 function StalenessBadge({ staleness }: { staleness: MarketStaleness }) {
-  if (staleness === "fresh") return <span className="staleness-pill staleness-fresh">Current</span>;
-  if (staleness === "stale") return <span className="staleness-pill staleness-stale">Stale — re-run ingest</span>;
+  if (staleness === "fresh") return <span className="staleness-pill staleness-fresh">Recent reporting period</span>;
+  if (staleness === "stale") return <span className="staleness-pill staleness-stale">Older reporting period</span>;
   return <span className="staleness-pill staleness-missing">No data</span>;
 }
 
@@ -24,11 +24,15 @@ function MarketEmptyBanner() {
   );
 }
 
-function MarketStaleBanner() {
+function MarketStaleBanner({ lastIngest }: { lastIngest: MarketResponse["meta"]["lastIngest"] }) {
   return (
     <div className="banner banner-warning" role="alert">
-      <strong>Market data is stale.</strong> The newest ingested month is more than two monthly Zillow cycles old.
-      Re-run <code>docker compose run --rm market-ingest</code> to refresh it.
+      <strong>Some market figures have older reporting periods.</strong> At least one series is more than 75 days old.
+      Zillow publishes monthly data with a delay; an older reporting period does not mean the refresh failed.
+      Refreshing only adds newer months when they are available from Zillow.
+      {lastIngest?.status === "succeeded" && lastIngest.finishedAt && (
+        <> Last refresh succeeded on {new Date(lastIngest.finishedAt).toLocaleString()}.</>
+      )}
     </div>
   );
 }
@@ -96,7 +100,7 @@ export function MarketView({
       {error && <LoadErrorBanner message={error} />}
       {!error && data && !data.meta.dbAvailable && <DbUnavailableBanner />}
       {!error && data && data.meta.dbAvailable && !data.meta.dataAvailable && <MarketEmptyBanner />}
-      {!error && anyStale && <MarketStaleBanner />}
+      {!error && anyStale && <MarketStaleBanner lastIngest={data!.meta.lastIngest} />}
 
       {loading && !data && <p className="loading-note">Loading market data{"\u2026"}</p>}
 
