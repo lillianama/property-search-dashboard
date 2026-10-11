@@ -5,6 +5,13 @@ import { ACTION_REJECT_CLASS } from "../../lib/action-styles";
 import { MAX_REJECTION_NOTE_LENGTH, sanitizeRejectionNote } from "../../lib/rejection";
 import type { HouseRecord } from "../../lib/types";
 
+const QUICK_REJECTION_REASONS = [
+  "Bedrooms too small",
+  "Outside of boundary",
+  "Poor walkability",
+  "Not enough rental income",
+] as const;
+
 /**
  * Accessible confirmation dialog for rejecting a house from the map quick
  * view: a modal (focus-trapped, Escape-cancelable) that collects an
@@ -82,6 +89,18 @@ export function RejectPropertyDialog({
           <strong>{house.address}</strong> leaves My Search immediately and lives on in the Rejected tab{" "}
           {"\u2014"} nothing is deleted, its ranking is remembered, and a later reconsideration brings it back.
         </p>
+        <div className="reject-quick-reasons" role="group" aria-label="Reject immediately with a common reason">
+          <p className="reject-quick-hint">One click saves the reason and rejects.</p>
+          {QUICK_REJECTION_REASONS.map((reason) => (
+            <button key={reason} type="button" className="btn-secondary reject-reason-button"
+              onClick={() => {
+                if (inputRef.current) inputRef.current.value = reason;
+                onConfirm(sanitizeRejectionNote(reason));
+              }}>
+              {reason}
+            </button>
+          ))}
+        </div>
         <form
           className="reject-dialog-form"
           onSubmit={(event) => {
@@ -90,7 +109,7 @@ export function RejectPropertyDialog({
           }}
         >
           <label className="funnel-reject-note-label">
-            Reason (optional)
+            Or write your own reason (optional)
             <input
               ref={inputRef}
               type="text"
