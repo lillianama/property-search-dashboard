@@ -9,6 +9,6 @@ import { DashboardTabs } from "./components/DashboardTabs";
  */
 export default async function Home({ searchParams }: { searchParams: Promise<ServerSearchParams> }) {
   const initialUrlState = parseAppUrlState(searchStringFromParams(await searchParams));
-  const pitiStorageKey = process.env.REAL_ESTATE_DASHBOARD_PITI_STORAGE_KEY?.trim() || undefined;
+  const pitiStorageKey = process.env.PROPERTY_SEARCH_DASHBOARD_PITI_STORAGE_KEY?.trim() || undefined;
   return <DashboardTabs initialUrlState={initialUrlState} pitiStorageKey={pitiStorageKey} />;
 }

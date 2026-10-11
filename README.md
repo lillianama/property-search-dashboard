@@ -1,4 +1,4 @@
-# Real Estate Dashboard
+# Property Search Dashboard
 
 A standalone Next.js dashboard for researching houses and plexes against an external PostgreSQL property store. The current regional enrichment and market-data adapters are configured for Portland, Oregon; those Portland-specific assumptions are called out below rather than implied as universal behavior. The code is public, but any live dashboard and its property data remain private and must stay behind external authentication. This repository contains application code, synthetic tests, and schema-only SQL; it contains no property records, research workflow, user data, or database backup.
 
@@ -57,7 +57,7 @@ The web role needs SELECT on the referenced relations, INSERT on editor notes/ju
 
 ## Houses and Plexes
 
-The mode switch persists `track=house` or `track=plex` in the URL. Each mode has its own tracked results, KPIs, charts, map, funnel ranks, rejection archive, editor requests and photo lookups. PITI assumptions are global across both modes, matching the original dashboard behavior. The browser key defaults to a generic project-specific name; deployments may set `REAL_ESTATE_DASHBOARD_PITI_STORAGE_KEY` at runtime to preserve an existing same-origin key without publishing it in this repository. Switching modes remounts the view to isolate loaded data, drafts and optimistic changes. Writes validate property and neighbor membership in the selected track. Properties without a collection appear in Watchlist without writing a membership.
+The mode switch persists `track=house` or `track=plex` in the URL. Each mode has its own tracked results, KPIs, charts, map, funnel ranks, rejection archive, editor requests and photo lookups. PITI assumptions are global across both modes, matching the original dashboard behavior. The browser key defaults to a generic project-specific name; deployments may set `PROPERTY_SEARCH_DASHBOARD_PITI_STORAGE_KEY` at runtime to preserve an existing same-origin key without publishing it in this repository. Switching modes remounts the view to isolate loaded data, drafts and optimistic changes. Writes validate property and neighbor membership in the selected track. Properties without a collection appear in Watchlist without writing a membership.
 
 The Market tab currently displays Zillow Research single-family data for Portland, Oregon Houses. Portland assessor-neighborhood matching, regional bounds for Street View fallback, and the ingestion filters are Portland-specific code configuration; changing the market region requires updating those adapters and their tests. Plexes explicitly reports market data unavailable; it never substitutes single-family metrics or neighborhood valuations as plex data.
 

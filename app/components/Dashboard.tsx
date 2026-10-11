@@ -60,7 +60,7 @@ const VIEW_OPTIONS: Array<{ id: HousesView; label: string }> = [
   { id: "map", label: "Map" },
   { id: "list", label: "List" },
 ];
-const DEFAULT_PITI_STORAGE_KEY = "real-estate-dashboard.piti-assumptions.v1";
+const DEFAULT_PITI_STORAGE_KEY = "property-search-dashboard.piti-assumptions.v1";
 
 export function Dashboard({
   view,

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./styles.css";
 
 export const metadata: Metadata = {
-  title: "Real Estate Dashboard",
+  title: "Property Search Dashboard",
   description: "Track houses and plexes with independent research views.",
 };
 
@@ -36,7 +36,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         {children}
         <footer className="brand-footer">
           <p>
-            Real Estate Dashboard
+            Property Search Dashboard
           </p>
         </footer>
       </body>

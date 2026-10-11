@@ -1,6 +1,8 @@
-name: real-estate-dashboard
+name: property-search-dashboard
 services:
   web:
+    container_name: property-search-dashboard
+    image: property-search-dashboard:local
     build:
       context: .
       target: runner
@@ -11,7 +13,7 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: "3000"
       GOOGLE_CLOUD_API_KEY: ${GOOGLE_CLOUD_API_KEY:-}
-      REAL_ESTATE_DASHBOARD_PITI_STORAGE_KEY: ${REAL_ESTATE_DASHBOARD_PITI_STORAGE_KEY:-}
+      PROPERTY_SEARCH_DASHBOARD_PITI_STORAGE_KEY: ${PROPERTY_SEARCH_DASHBOARD_PITI_STORAGE_KEY:-}
       MARKET_PREF_MAX_PRICE: ${MARKET_PREF_MAX_PRICE:-480000}
       MARKET_PREF_MIN_YEAR_BUILT: ${MARKET_PREF_MIN_YEAR_BUILT:-1900}
       MARKET_PREF_MAX_YEAR_BUILT: ${MARKET_PREF_MAX_YEAR_BUILT:-1965}
@@ -27,6 +29,7 @@ services:
       start_period: 30s
       retries: 3
   market-ingest:
+    image: property-search-dashboard-market-ingest:local
     profiles: [market-ingest]
     build:
       context: .
