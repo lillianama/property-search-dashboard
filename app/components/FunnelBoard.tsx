@@ -701,11 +701,11 @@ function FunnelRow({
         {onQuickMove && <>
           <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
             onClick={() => onQuickMove("to-tour")} aria-label={`Move ${house.address} to To tour`}>
-            To tour
+            <QuickMoveIcon kind="tour" /> To tour
           </button>
           <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
             onClick={() => onQuickMove("top-contenders")} aria-label={`Move ${house.address} to Top contenders`}>
-            Top contender
+            <QuickMoveIcon kind="contender" /> Top contender
           </button>
         </>}
 
@@ -727,5 +727,27 @@ function FunnelRow({
         </button>
       </div>
     </article>
+  );
+}
+
+/** Decorative little badges; the button labels carry the accessible meaning. */
+function QuickMoveIcon({ kind }: { kind: "tour" | "contender" }) {
+  return (
+    <svg className="quick-move-icon" width="22" height="22" viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"
+      strokeLinejoin="round" aria-hidden="true" focusable="false">
+      {kind === "tour" ? <>
+        <path d="M3 10.5 12 3l9 7.5" />
+        <path d="M5.5 9v11h13V9" fill="#f7eaff" />
+        <path d="M12 17.5s-4-2.3-4-4.6c0-2.2 2.6-2.8 4-.8 1.4-2 4-1.4 4 .8 0 2.3-4 4.6-4 4.6Z"
+          fill="#df84b3" stroke="#a4467a" strokeWidth="1.2" />
+      </> : <>
+        <path d="m4 9 4 4 4-7 4 7 4-4-2 10H6Z" fill="#efd0ff" />
+        <path d="M7 21h10" />
+        <path d="M19 2v4m-2-2h4" stroke="#b45d94" />
+        <circle cx="3" cy="5" r="1" fill="#b45d94" stroke="none" />
+        <path d="m12 14 1.2 1.5L12 17l-1.2-1.5Z" fill="#a4467a" stroke="none" />
+      </>}
+    </svg>
   );
 }
