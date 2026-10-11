@@ -1,3 +1,4 @@
+import { fetchPlexUnitSummaries } from "./plex-unit-queries";
 import type { PropertyTrack } from "./track";
 import {
   buildMonthlyHistory,
@@ -118,6 +119,18 @@ export async function buildDashboardResponse(filters: HouseFilters, track: Prope
     return emptyDashboardResponse(false, track);
   }
   let houses = allHouses;
+  if (track === "plex") {
+    let summaries: Awaited<ReturnType<typeof fetchPlexUnitSummaries>> = new Map();
+    try {
+      summaries = await fetchPlexUnitSummaries(houses.map(house => house.id));
+    } catch {
+      console.error("[dashboard] plex unit lookup unavailable");
+    }
+    houses = houses.map(house => ({
+      ...house,
+      plexUnits: summaries.get(house.id) ?? { units: [], recordedUnitCount: null },
+    }));
+  }
 
   // Actual recorded annual property-tax amounts, used by the client-side
   // PITI estimates. Best-effort: a failure means every card honestly shows

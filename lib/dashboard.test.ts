@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HouseFilters } from "./filters";
 import type { HouseRecord } from "./types";
 
+vi.mock("./plex-unit-queries", () => ({ fetchPlexUnitSummaries: vi.fn() }));
+import { fetchPlexUnitSummaries } from "./plex-unit-queries";
+
 vi.mock("./queries", () => ({
   fetchActiveFunnelCollections: vi.fn(),
   fetchActualTaxRows: vi.fn(),
@@ -81,6 +84,7 @@ function house(overrides: Partial<HouseRecord>): HouseRecord {
 }
 
 beforeEach(() => {
+  vi.mocked(fetchPlexUnitSummaries).mockReset().mockResolvedValue(new Map());
   vi.mocked(fetchNeighborhoodObservationRows).mockResolvedValue([]);
   vi.mocked(fetchNeighborhoodZhviPoints).mockResolvedValue([]);
   vi.mocked(fetchActiveFunnelCollections).mockResolvedValue([]);
@@ -451,5 +455,25 @@ describe("Plexes dashboard scope", () => {
     }
     expect(fetchMonthlyListingEvents).toHaveBeenCalledWith(NO_FILTERS, ["exampleProperty"]);
     expect(fetchNeighborhoodZhviPoints).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("plex-only unit API projection", () => {
+  it("attaches unknown units only for plexes, preserving existing property facts", async () => {
+    vi.mocked(fetchPlexUnitSummaries).mockReset().mockResolvedValue(new Map());
+    vi.mocked(fetchHouses).mockResolvedValue([house({})]);
+    vi.mocked(fetchPhotoSourceRows).mockResolvedValue([]);
+    const houses = await buildDashboardResponse(NO_FILTERS, "house");
+    expect(fetchPlexUnitSummaries).not.toHaveBeenCalled();
+    expect(houses.properties[0]).not.toHaveProperty("plexUnits");
+    const plexes = await buildDashboardResponse(NO_FILTERS, "plex");
+    expect(fetchPlexUnitSummaries).toHaveBeenCalledWith(["prop-1"]);
+    expect(plexes.properties[0].plexUnits).toEqual({ units: [], recordedUnitCount: null });
+    const { plexUnits, ...existing } = plexes.properties[0];
+    expect(existing).toEqual(houses.properties[0]);
+    vi.mocked(fetchPlexUnitSummaries).mockRejectedValueOnce(new Error("unavailable"));
+    expect((await buildDashboardResponse(NO_FILTERS, "plex")).properties[0].plexUnits)
+      .toEqual({ units: [], recordedUnitCount: null });
   });
 });
