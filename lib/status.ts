@@ -167,12 +167,14 @@ export function resolveDisplayStatus(events: StatusEventRow[]): DisplayStatus {
       !event.source?.trim() || (event.cls !== "pending" && event.cls !== "sold")
     )) continue;
     if (event.cls === "active" || event.cls === "pending") sawListing = true;
-    // An assessor sale may describe ownership history, not this tracked
-    // listing. Do not put it in Sold without a recorded listing cycle.
-    if (event.cls === "sold" && event.source?.toLowerCase().includes("assessor") && !sawListing) continue;
+    // Assessor and property-detail sales can be historical ownership facts.
+    // Without a preceding listing cycle they do not lock out a later listing
+    // observation. With no later listing, the recorded Sold status remains.
+    const historicalSaleSource = event.source?.toLowerCase().includes("assessor")
+      || event.source?.trim().toLowerCase() === "rentcast-property";
     current = event;
     lifecycleLocked = event.cls === "pending" || (
-      event.cls === "sold" && (sawListing || !event.source?.toLowerCase().includes("assessor"))
+      event.cls === "sold" && (sawListing || !historicalSaleSource)
     );
   }
   return current ? CLASS_LABELS[current.cls] : "Unknown";

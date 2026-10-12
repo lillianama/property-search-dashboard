@@ -83,3 +83,14 @@ it("renders explicit unknowns and signed comparison with event provenance in bot
   expect(copy).toContain("listing event #1");
   expect(copy).toContain("+$20,000 (+4.0%)");
 });
+
+
+describe("historical ownership sales versus tracked listing cycles", () => {
+  it.each(["portlandmaps-assessor", "rentcast-property"])("does not archive a later listing solely due to a historical %s sale", source => {
+    const sale = event(1, "Sold", { source, eventType: "sold" });
+    expect(lifecycleFacts([sale, event(2, "Active", { source: "rentcast-plex-weekly" })]).displayStatus).toBe("Active");
+    expect(lifecycleFacts([sale]).displayStatus).toBe("Sold");
+    expect(lifecycleFacts([event(1, "Active"), event(2, "Sold", { source, eventType: "sold" }),
+      event(3, "Active", { source: "workspace-state" })]).displayStatus).toBe("Sold");
+  });
+});
