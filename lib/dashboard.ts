@@ -31,7 +31,8 @@ import {
   fetchTrackedPropertyTotals,
 } from "./queries";
 import { computeRejections, partitionByRejection } from "./rejection";
-import { filterByDisplayStatus, resolveDisplayStatuses } from "./status";
+import { filterByDisplayStatus } from "./status";
+import { filterLifecycle, lifecycleFacts, type LifecycleView } from "./lifecycle";
 import type { DashboardResponse, HouseRecord } from "./types";
 
 export function buildCoverageNote(total: number, _storeTotal: number, track: PropertyTrack = "house"): string {
@@ -78,7 +79,7 @@ function emptyDashboardResponse(dbAvailable: boolean, track: PropertyTrack): Das
  * and the table. They still exist in the property store and remain visible
  * in the separate Rejected archive (lib/rejected.ts).
  */
-export async function buildDashboardResponse(filters: HouseFilters, track: PropertyTrack = "house"): Promise<DashboardResponse> {
+export async function buildDashboardResponse(filters: HouseFilters, track: PropertyTrack = "house", lifecycleView: LifecycleView = "search"): Promise<DashboardResponse> {
   let allHouses: HouseRecord[];
   let events;
   let trackedTotals;
@@ -86,18 +87,19 @@ export async function buildDashboardResponse(filters: HouseFilters, track: Prope
     allHouses = await fetchHouses(filters, track);
 
     // Canonical status resolution over the full listing-event history (see
-    // lib/status.ts). Best-effort: a failure leaves the fallback
-    // displayStatus derived directly from latest_status in place.
-    try {
-      const statusRows = await fetchStatusEventRows(allHouses.map((h) => h.id));
-      const resolved = resolveDisplayStatuses(statusRows);
-      allHouses = allHouses.map((house) => {
-        const displayStatus = resolved.get(house.id);
-        return displayStatus && displayStatus !== house.displayStatus ? { ...house, displayStatus } : house;
-      });
-    } catch (err) {
-      console.error("[dashboard] status resolution failure:", err instanceof Error ? err.message : err);
+    // lib/status.ts). Fail closed if history is unavailable: a raw latest
+    // availability signal must never restore an archived property.
+    const statusRows = await fetchStatusEventRows(allHouses.map((h) => h.id));
+    const byProperty = new Map<string, typeof statusRows>();
+    for (const row of statusRows) {
+      const rows = byProperty.get(row.propertyId) ?? [];
+      rows.push(row);
+      byProperty.set(row.propertyId, rows);
     }
+    allHouses = allHouses.map(house => {
+      const rows = byProperty.get(house.id);
+      return rows?.length ? { ...house, ...lifecycleFacts(rows) } : house;
+    });
 
     // The status filter applies to RESOLVED statuses, so a house rescued to
     // Pending matches the Pending chip instead of a stale Inactive.
@@ -106,7 +108,7 @@ export async function buildDashboardResponse(filters: HouseFilters, track: Prope
     const decisionRows = await fetchLatestDecisionRows(allHouses.map((h) => h.id));
     const rejections = computeRejections(decisionRows);
     const { active } = partitionByRejection(allHouses, rejections);
-    allHouses = active;
+    allHouses = filterLifecycle(active, lifecycleView);
     [events, trackedTotals] = await Promise.all([
       fetchMonthlyListingEvents(filters, allHouses.map((h) => h.id)),
       fetchTrackedPropertyTotals(track),

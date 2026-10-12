@@ -1,3 +1,4 @@
+import { parseLifecycleView } from "../../../lib/lifecycle";
 import { parseTrack } from "../../../lib/track";
 import { NextRequest } from "next/server";
 import { buildDashboardResponse } from "../../../lib/dashboard";
@@ -8,7 +9,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   const filters = parseHouseFilters(request.nextUrl.searchParams);
   try {
-    const data = await buildDashboardResponse(filters, parseTrack(new URL(request.url).searchParams.get("track")));
+    const data = await buildDashboardResponse(filters, parseTrack(new URL(request.url).searchParams.get("track")), parseLifecycleView(request.nextUrl.searchParams.get("lifecycle")));
     return Response.json(data);
   } catch (err) {
     // buildDashboardResponse already swallows DB-unavailability internally;

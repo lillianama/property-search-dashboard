@@ -4,7 +4,7 @@ import type { PoolClient } from "pg";
 vi.mock("./db", () => ({ withReadOnlyClient: vi.fn() }));
 import { withReadOnlyClient } from "./db";
 import { EMPTY_HOUSE_FILTERS } from "./filters";
-import { fetchActiveFunnelCollections, fetchEditorJudgmentRows, fetchEditorNoteRows, fetchHouses, fetchPropertyLocation, fetchTrackedPropertyTotals } from "./queries";
+import { fetchStatusEventRows, fetchActiveFunnelCollections, fetchEditorJudgmentRows, fetchEditorNoteRows, fetchHouses, fetchPropertyLocation, fetchTrackedPropertyTotals } from "./queries";
 import { trackUrl } from "./track";
 
 const query = vi.fn();
@@ -41,4 +41,16 @@ describe("track-scoped database reads", () => {
     expect(trackUrl("/api/dashboard?maxPrice=600000&track=house", "plex")).toBe("/api/dashboard?maxPrice=600000&track=plex");
     expect(trackUrl("/api/street-view/id/metadata", "plex")).toBe("/api/street-view/id/metadata?track=plex");
   });
+});
+
+it("reads only allowlisted lifecycle facts for the supplied track-scoped ids, including statusless sales", async () => {
+  query.mockResolvedValue({ rows: [{ property_id: "p", status: null, event_type: "sold", price: 500000,
+    mls_number: "m", source: "rmls", event_date: "2026-07-01", observed_at: "2026-07-02", id: "42",
+    raw: { private: "must not escape" }, source_ref: "private" }] });
+  expect(await fetchStatusEventRows(["p"])).toEqual([{ propertyId: "p", status: null, eventType: "sold", price: 500000,
+    mlsNumber: "m", source: "rmls", eventDate: "2026-07-01", observedAt: "2026-07-02", id: 42 }]);
+  const [sql, params] = query.mock.calls[0];
+  expect(params).toEqual([["p"]]);
+  expect(sql).toContain("property_id = ANY($1::uuid[])");
+  expect(sql).not.toMatch(/status IS NOT NULL|source_ref|\braw\b|SELECT \*/i);
 });

@@ -34,7 +34,7 @@ beforeEach(() => vi.clearAllMocks());
 describe("track propagation at every API boundary", () => {
   it.each(["house", "plex"] as const)("scopes dashboard, archive, market, editor and mutations to %s", async track => {
     await dashboard(request(track));
-    expect(buildDashboardResponse).toHaveBeenCalledWith(expect.objectContaining({ maxPrice: 600000 }), track);
+    expect(buildDashboardResponse).toHaveBeenCalledWith(expect.objectContaining({ maxPrice: 600000 }), track, "search");
     await rejected(request(track));
     expect(buildRejectedHousesResponse).toHaveBeenCalledWith(track);
     await market(request(track));
@@ -60,4 +60,13 @@ describe("track propagation at every API boundary", () => {
       vi.unstubAllEnvs();
     }
   });
+});
+
+it.each(["house", "plex"] as const)("routes Pending and Sold database refreshes within %s", async track => {
+  for (const view of ["pending", "sold"]) {
+    await dashboard(new NextRequest(`https://dashboard.test/api/dashboard?track=${track}&lifecycle=${view}`));
+    expect(buildDashboardResponse).toHaveBeenLastCalledWith(expect.any(Object), track, view);
+  }
+  await dashboard(new NextRequest(`https://dashboard.test/api/dashboard?track=${track}&lifecycle=invalid`));
+  expect(buildDashboardResponse).toHaveBeenLastCalledWith(expect.any(Object), track, "search");
 });

@@ -7,6 +7,7 @@ import maplibregl, { type Map as MapLibreMap, type LngLatBoundsLike, type Marker
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef } from "react";
 import { ACTION_EDIT_CLASS, ACTION_REJECT_CLASS } from "../../lib/action-styles";
+import { lifecycleDetailLines } from "../../lib/lifecycle-display";
 import { formatCurrency } from "../../lib/format";
 import { buildQuickViewJudgmentRows } from "../../lib/map-quickview";
 import { buildStreetViewLabel, choosePhotoDisplay } from "../../lib/streetview";
@@ -143,7 +144,7 @@ function buildQuickViewContent(
 
   const priceRow = document.createElement("p");
   priceRow.className = "map-quickview-price";
-  priceRow.textContent = formatCurrency(house.latestPrice);
+  priceRow.textContent = formatCurrency(house.displayStatus === "Sold" ? house.saleComparison?.soldPrice : house.latestPrice);
   const status = statusOf(house);
   const statusPill = document.createElement("span");
   statusPill.className = `status-pill status-pill-${status.toLowerCase()}`;
@@ -151,6 +152,12 @@ function buildQuickViewContent(
   priceRow.appendChild(document.createTextNode(" "));
   priceRow.appendChild(statusPill);
   body.appendChild(priceRow);
+  for (const line of lifecycleDetailLines(house)) {
+    const detail = document.createElement("p");
+    detail.className = "section-note";
+    detail.textContent = line;
+    body.appendChild(detail);
+  }
 
   const flagRow = document.createElement("p");
   flagRow.className = "map-quickview-flag";
@@ -339,7 +346,7 @@ function buildMarker(house: Located, quickView: QuickViewController): Marker {
   el.style.setProperty("--marker-color", STATUS_COLORS[status]);
   el.setAttribute(
     "aria-label",
-    `${house.address}. ${formatCurrency(house.latestPrice)}, ${status}. ${FLAG_LABELS[house.bedroomSizeFlag]}. Press Enter to pin details.`,
+    `${house.address}. ${formatCurrency(house.displayStatus === "Sold" ? house.saleComparison?.soldPrice : house.latestPrice)}, ${status}. ${FLAG_LABELS[house.bedroomSizeFlag]}. Press Enter to pin details.`,
   );
 
   // Hover opens the quick view for mouse/pen; touch relies on the click/tap

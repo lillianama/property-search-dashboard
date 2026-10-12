@@ -221,6 +221,9 @@ export async function fetchMonthlyListingEvents(
 }
 
 interface StatusEventSqlRow {
+  event_type: string;
+  price: number | null;
+  mls_number: string | null;
   property_id: string;
   status: string | null;
   source: string | null;
@@ -230,10 +233,10 @@ interface StatusEventSqlRow {
 }
 
 /**
- * Fetches the status-bearing listing-event history for the given properties
+ * Fetches the allowlisted listing-event history for the given properties
  * so lib/status.ts can resolve each house's canonical display status. This
- * is a provenance-safe plain SELECT: status, source, and the two timestamps
- * only — never price, MLS numbers, or raw payloads. All interpretation
+ * selects status, source, timestamps, price, event type and internal MLS
+ * association only. No raw payloads or source references leave PostgreSQL. All interpretation
  * (source semantics, recency precedence) lives in lib/status.ts so it stays
  * unit testable without a database.
  */
@@ -244,14 +247,14 @@ export async function fetchStatusEventRows(propertyIds: string[]): Promise<Statu
     SELECT
       property_id::text AS property_id,
       status,
+      event_type, price, mls_number,
       source,
       event_date::text AS event_date,
       observed_at::text AS observed_at,
       id
     FROM property_listing_events
     WHERE property_id = ANY($1::uuid[])
-      AND status IS NOT NULL
-      AND btrim(status) <> ''
+
     ORDER BY property_id, observed_at ASC, id ASC
   `;
 
@@ -259,6 +262,9 @@ export async function fetchStatusEventRows(propertyIds: string[]): Promise<Statu
     const result = await client.query<StatusEventSqlRow>(sql, [propertyIds]);
     return result.rows.map((row) => ({
       propertyId: row.property_id,
+      eventType: row.event_type,
+      price: toNumberOrNull(row.price),
+      mlsNumber: row.mls_number,
       status: row.status,
       source: row.source,
       eventDate: row.event_date,
