@@ -1829,3 +1829,36 @@ button:active:not(:disabled) { transform: translateY(0); }
   color: #ffffff;
   box-shadow: 0 2px 8px rgba(101, 51, 166, 0.18);
 }
+
+/* Plex unit details make taller cards: give their images that space too. */
+.funnel-row-plex .funnel-row-media {
+  width: clamp(200px, 24vw, 320px);
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+}
+.funnel-row-plex .streetview-card {
+  width: 100%;
+  flex: 1;
+  align-items: stretch;
+}
+.funnel-row-plex .funnel-row-media .photo-img.photo-card,
+.funnel-row-plex .funnel-row-media .photo-placeholder.photo-card {
+  width: 100%;
+  height: 0;
+  min-height: 180px;
+  flex: 1;
+  object-fit: contain;
+  background-color: var(--surface-raised);
+}
+.funnel-row-plex .streetview-label { white-space: normal; }
+@media (max-width: 900px) and (min-width: 641px) {
+  .funnel-row-plex .funnel-row-media { width: 190px; }
+}
+@media (max-width: 640px) {
+  .funnel-row-plex .funnel-row-media { width: calc(100% - 36px); }
+  .funnel-row-plex .funnel-row-media .photo-img.photo-card,
+.funnel-row-plex .funnel-row-media .photo-placeholder.photo-card { height: 200px; min-height: 200px; flex: none; }
+  .funnel-row-plex .funnel-row-body { flex-basis: 100%; }
+  .funnel-row-plex .funnel-row-actions { flex-wrap: wrap; }
+}
