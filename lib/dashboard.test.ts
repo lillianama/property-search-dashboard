@@ -6,6 +6,8 @@ vi.mock("./plex-unit-queries", () => ({ fetchPlexUnitSummaries: vi.fn() }));
 import { fetchPlexUnitSummaries } from "./plex-unit-queries";
 
 vi.mock("./queries", () => ({
+  fetchCurrentRankKeys: vi.fn(async () => new Map()),
+  fetchCurrentJudgments: vi.fn(async () => new Map()),
   fetchActiveFunnelCollections: vi.fn(),
   fetchActualTaxRows: vi.fn(),
   fetchHouses: vi.fn(),
@@ -257,7 +259,7 @@ describe("buildDashboardResponse status resolution", () => {
     ]);
     vi.mocked(fetchPhotoSourceRows).mockResolvedValue([]);
 
-    const response = await buildDashboardResponse(NO_FILTERS);
+    const response = await buildDashboardResponse(NO_FILTERS, "house", "pending");
 
     expect(response.properties[0].displayStatus).toBe("Pending");
     // The raw latest status is preserved untouched for transparency.
@@ -279,13 +281,13 @@ describe("buildDashboardResponse status resolution", () => {
     ]);
     vi.mocked(fetchPhotoSourceRows).mockResolvedValue([]);
 
-    const response = await buildDashboardResponse({ ...NO_FILTERS, statuses: ["Pending"] });
+    const response = await buildDashboardResponse({ ...NO_FILTERS, statuses: ["Pending"] }, "house", "pending");
 
     expect(response.properties.map((p) => p.id)).toEqual(["prop-1"]);
     expect(response.summary.knownHouses).toBe(1);
   });
 
-  it("keeps the raw-status fallback when the event lookup fails", async () => {
+  it("fails closed when lifecycle history is unavailable", async () => {
     vi.mocked(fetchHouses).mockResolvedValue([
       house({ id: "prop-1", latestStatus: "Inactive", displayStatus: "Inactive" }),
     ]);
@@ -294,8 +296,8 @@ describe("buildDashboardResponse status resolution", () => {
 
     const response = await buildDashboardResponse(NO_FILTERS);
 
-    expect(response.meta.dbAvailable).toBe(true);
-    expect(response.properties[0].displayStatus).toBe("Inactive");
+    expect(response.meta.dbAvailable).toBe(false);
+    expect(response.properties).toEqual([]);
   });
 });
 
@@ -475,5 +477,30 @@ describe("plex-only unit API projection", () => {
     vi.mocked(fetchPlexUnitSummaries).mockRejectedValueOnce(new Error("unavailable"));
     expect((await buildDashboardResponse(NO_FILTERS, "plex")).properties[0].plexUnits)
       .toEqual({ units: [], recordedUnitCount: null });
+  });
+});
+
+describe("lifecycle partitions preserve user state", () => {
+  it.each(["house", "plex"] as const)("isolates %s, gives rejection precedence, and restores the original bucket/rank", async track => {
+    const rows = [house({ id: "active" }), house({ id: "pending", rankKey: "h", funnelBucket: "to-tour" }),
+      house({ id: "sold", rankKey: "j", funnelBucket: "top-contenders" }), house({ id: "rejected" })];
+    vi.mocked(fetchHouses).mockImplementation(async (_filters, requestedTrack) => requestedTrack === track ? rows : []);
+    vi.mocked(fetchPhotoSourceRows).mockResolvedValue([]);
+    vi.mocked(fetchLatestDecisionRows).mockResolvedValue([{ propertyId: "rejected", verdict: "reject", note: "Explicit decision", occurredAt: "2026-07-04" }]);
+    const events = rows.map((h, i) => ({ propertyId: h.id, status: ["Active", "Pending", "Sold", "Sold"][i], source: "rmls", eventDate: "2026-07-03", observedAt: "2026-07-03", id: i }));
+    vi.mocked(fetchStatusEventRows).mockResolvedValue(events);
+    expect((await buildDashboardResponse(NO_FILTERS, track)).properties.map(h => h.id)).toEqual(["active"]);
+    const pending = await buildDashboardResponse(NO_FILTERS, track, "pending");
+    expect(pending.properties.map(h => h.id)).toEqual(["pending"]);
+    expect(pending.properties[0]).toMatchObject({ rankKey: "h", funnelBucket: "to-tour" });
+    const sold = await buildDashboardResponse(NO_FILTERS, track, "sold");
+    expect(sold.properties.map(h => h.id)).toEqual(["sold"]);
+    expect(fetchMonthlyListingEvents).toHaveBeenLastCalledWith(NO_FILTERS, ["sold"]);
+    vi.mocked(fetchStatusEventRows).mockResolvedValue([...events, { propertyId: "sold", status: "Active", source: "zillow", eventDate: "2026-07-05", observedAt: "2026-07-05", id: 5 }]);
+    const restored = await buildDashboardResponse(NO_FILTERS, track);
+    expect(restored.properties.find(h => h.id === "sold")).toMatchObject({ rankKey: "j", funnelBucket: "top-contenders", backOnMarket: { source: "zillow" } });
+    expect((await buildDashboardResponse(NO_FILTERS, track, "sold")).properties).toEqual([]);
+    expect(fetchHouses).toHaveBeenLastCalledWith(NO_FILTERS, track);
+    expect(events[2].status).toBe("Sold");
   });
 });

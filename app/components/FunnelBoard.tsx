@@ -1,5 +1,6 @@
 "use client";
 
+import { lifecycleDetailLines } from "../../lib/lifecycle-display";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ACTION_EDIT_CLASS, ACTION_REJECT_CLASS } from "../../lib/action-styles";
 import { createAutoscroller, type Autoscroller } from "../../lib/drag-autoscroll";
@@ -682,9 +683,11 @@ function FunnelRow({
           ) : (
             <span className="funnel-row-address">{house.address}</span>
           )}
-          <span className="funnel-row-price">{formatCurrency(house.latestPrice)}</span>
+          <span className="funnel-row-price">{formatCurrency(status === "Sold" ? house.saleComparison?.soldPrice ?? null : house.latestPrice)}</span>
           <span className={`status-pill status-pill-${status.toLowerCase()}`}>{status}</span>
         </div>
+
+        {lifecycleDetailLines(house).map(line => <p key={line} className="section-note">{line}</p>)}
 
         <div className="funnel-row-line funnel-row-facts">
           <span>

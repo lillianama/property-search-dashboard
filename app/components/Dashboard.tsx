@@ -1,5 +1,7 @@
 "use client";
 
+import type { LifecycleView } from "../../lib/lifecycle";
+
 import { useTrack } from "./TrackContext";
 import { trackUrl } from "../../lib/track";
 
@@ -64,6 +66,7 @@ const VIEW_OPTIONS: Array<{ id: HousesView; label: string }> = [
 const DEFAULT_PITI_STORAGE_KEY = "property-search-dashboard.piti-assumptions.v1";
 
 export function Dashboard({
+  lifecycleView = "search",
   view,
   onViewChange,
   filters,
@@ -75,6 +78,7 @@ export function Dashboard({
   onLoadSettled,
   pitiStorageKey: configuredPitiStorageKey,
 }: {
+  lifecycleView?: LifecycleView;
   /** URL-persisted Map/List view, owned by the app-level coordinator. */
   view: HousesView;
   onViewChange: (view: HousesView) => void;
@@ -159,7 +163,11 @@ export function Dashboard({
     return () => window.clearTimeout(timer);
   }, [editingId, view]);
 
-  const query = useMemo(() => buildQueryString(filters), [filters]);
+  const query = useMemo(() => {
+    const params = new URLSearchParams(buildQueryString(filters));
+    params.set("lifecycle", lifecycleView);
+    return `?${params}`;
+  }, [filters, lifecycleView]);
 
   // The settle reporter lives in a ref so load() doesn't re-create (and
   // re-trigger the fetch effect) when the parent re-renders.
@@ -334,7 +342,7 @@ export function Dashboard({
     setBottomMoveBusy(true);
     try {
       // Use the whole track so hidden/filtered-out properties still count.
-      const res = await fetch(trackUrl("/api/dashboard", track), { cache: "no-store" });
+      const res = await fetch(trackUrl(`/api/dashboard?lifecycle=${lifecycleView}`, track), { cache: "no-store" });
       if (!res.ok) throw new Error("Could not load the full watchlist");
       const fresh = await res.json() as DashboardResponse;
       if (!mountedRef.current) return;
@@ -348,18 +356,20 @@ export function Dashboard({
       bottomMovePending.current = false;
       if (mountedRef.current) setBottomMoveBusy(false);
     }
-  }, [track, localFunnel, requestMove]);
+  }, [track, lifecycleView, localFunnel, requestMove]);
 
   return (
     <>
       <header className="dashboard-header">
         <p className="eyebrow">PRIVATE MARKET INTELLIGENCE</p>
-        <h1>My Search</h1>
+        <h1>{lifecycleView === "sold" ? "Sold archive" : lifecycleView === "pending" ? "Pending / Backup" : "My Search"}</h1>
         <p className="lede">
           A research log of the {track === "plex" ? "plexes" : "houses"} you have tracked in the property store: current status, prices,
           bedroom sizing, and how that set has grown over time. Not a live market feed.
         </p>
       </header>
+
+      {lifecycleView !== "search" && <p className="section-note">Original buckets, ranks and notes are retained. A recorded return to Active restores the property to My Search.</p>}
 
       <FiltersBar
         value={draft}

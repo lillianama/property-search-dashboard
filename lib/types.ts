@@ -38,6 +38,8 @@ export const UNKNOWN_JUDGMENTS: QuickJudgments = {
 };
 
 export interface HouseRecord {
+  backOnMarket?: { date: string; source: string } | null;
+  saleComparison?: import("./lifecycle").SaleComparison;
   /** Present only on plex dashboard records; unknown facts remain null. */
   plexUnits?: import("./plex-units").PlexUnitSummary;
   id: string;

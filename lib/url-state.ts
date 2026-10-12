@@ -5,7 +5,7 @@ import { parseTrack, type PropertyTrack } from "./track";
 // parsing and serialization round-trip in unit tests; the components apply
 // these helpers with pushState/replaceState.
 
-export type TabId = "market" | "search" | "rejected";
+export type TabId = "market" | "search" | "pending" | "sold" | "rejected";
 
 export const DEFAULT_TAB: TabId = "market";
 
@@ -42,6 +42,7 @@ export interface AppUrlState {
   filters: FilterFormValue;
   /** Property id of the open editor screen, or null when closed. */
   editingId: string | null;
+  scopedFilters?: Record<string, FilterFormValue>;
 }
 
 export const DEFAULT_APP_URL_STATE: AppUrlState = {
@@ -53,7 +54,7 @@ export const DEFAULT_APP_URL_STATE: AppUrlState = {
 };
 
 function isTabId(value: string | null): value is TabId {
-  return value === "market" || value === "search" || value === "rejected";
+  return value === "market" || value === "search" || value === "pending" || value === "sold" || value === "rejected";
 }
 
 function isHousesView(value: string | null): value is HousesView {
@@ -71,6 +72,9 @@ export function parseAppUrlState(search: string): AppUrlState {
   const rawTab = params.get("tab");
   const rawView = params.get("view");
   const rawEdit = params.get("edit");
+  const track = parseTrack(params.get("track"));
+  const tab = isTabId(rawTab) ? rawTab : DEFAULT_TAB;
+  const scoped = readScopedFilters(params);
 
   const statuses = (params.get("status") ?? "")
     .split(",")
@@ -78,10 +82,10 @@ export function parseAppUrlState(search: string): AppUrlState {
     .filter((s) => s.length > 0);
 
   return {
-    track: parseTrack(params.get("track")),
-    tab: isTabId(rawTab) ? rawTab : DEFAULT_TAB,
+    track,
+    tab,
     view: isHousesView(rawView) ? rawView : DEFAULT_HOUSES_VIEW,
-    filters: {
+    filters: scoped.scopedFilters?.[`${track}:${tab}`] ?? {
       statuses: Array.from(new Set(statuses)),
       maxPrice: params.get("maxPrice") ?? "",
       minBedrooms: params.get("minBedrooms") ?? "",
@@ -90,6 +94,7 @@ export function parseAppUrlState(search: string): AppUrlState {
       dateTo: params.get("dateTo") ?? "",
     },
     editingId: rawEdit && rawEdit.trim() !== "" ? rawEdit : null,
+    ...scoped,
   };
 }
 
@@ -103,7 +108,7 @@ export function serializeAppUrlState(state: AppUrlState): string {
   const params = new URLSearchParams();
   if (state.track === "plex") params.set("track", state.track);
   if (state.tab !== DEFAULT_TAB) params.set("tab", state.tab);
-  if (state.tab === "search" && state.view !== DEFAULT_HOUSES_VIEW) params.set("view", state.view);
+  if (["search", "pending", "sold"].includes(state.tab) && state.view !== DEFAULT_HOUSES_VIEW) params.set("view", state.view);
   const f = state.filters;
   if (f.statuses.length > 0) params.set("status", f.statuses.join(","));
   if (f.maxPrice.trim() !== "") params.set("maxPrice", f.maxPrice.trim());
@@ -112,6 +117,19 @@ export function serializeAppUrlState(state: AppUrlState): string {
   if (f.dateFrom.trim() !== "") params.set("dateFrom", f.dateFrom.trim());
   if (f.dateTo.trim() !== "") params.set("dateTo", f.dateTo.trim());
   if (state.editingId) params.set("edit", state.editingId);
+  const scopedFilters = { ...state.scopedFilters, [`${state.track}:${state.tab}`]: state.filters };
+  const activeScope = `${state.track}:${state.tab}`;
+  for (const scope of FILTER_SCOPES) {
+    // The unscoped canonical fields already serialize the active view. Keep
+    // only inactive scopes here to preserve legacy URLs and object shape.
+    if (scope === activeScope) continue;
+    const saved = scopedFilters[scope];
+    if (!saved) continue;
+    for (const field of FILTER_FIELDS) {
+      const value = field === "statuses" ? saved.statuses.join(",") : saved[field];
+      if (value) params.set(`${scope}.${field}`, value);
+    }
+  }
   const query = params.toString();
   return query ? `?${query}` : "";
 }
@@ -141,4 +159,31 @@ export function searchStringFromParams(params: ServerSearchParams): string {
  * update is needed. */
 export function sameUrlState(a: AppUrlState, b: AppUrlState): boolean {
   return serializeAppUrlState(a) === serializeAppUrlState(b);
+}
+
+const FILTER_SCOPES = ["house", "plex"].flatMap(track =>
+  ["market", "search", "pending", "sold", "rejected"].map(tab => `${track}:${tab}`));
+const FILTER_FIELDS = ["statuses", "maxPrice", "minBedrooms", "maxYearBuilt", "dateFrom", "dateTo"] as const;
+
+function readScopedFilters(params: URLSearchParams): Pick<AppUrlState, "scopedFilters"> {
+  const scopedFilters: Record<string, FilterFormValue> = {};
+  for (const scope of FILTER_SCOPES) {
+    if (!FILTER_FIELDS.some(field => params.has(`${scope}.${field}`))) continue;
+    scopedFilters[scope] = {
+      statuses: (params.get(`${scope}.statuses`) ?? "").split(",").filter(Boolean),
+      maxPrice: params.get(`${scope}.maxPrice`) ?? "",
+      minBedrooms: params.get(`${scope}.minBedrooms`) ?? "",
+      maxYearBuilt: params.get(`${scope}.maxYearBuilt`) ?? "",
+      dateFrom: params.get(`${scope}.dateFrom`) ?? "",
+      dateTo: params.get(`${scope}.dateTo`) ?? "",
+    };
+  }
+  return Object.keys(scopedFilters).length ? { scopedFilters } : {};
+}
+
+/** Each track/view owns its filters; saved scopes survive refresh and history. */
+export function switchUrlScope(state: AppUrlState, track: PropertyTrack, tab: TabId): AppUrlState {
+  const scopedFilters = { ...state.scopedFilters, [`${state.track}:${state.tab}`]: state.filters };
+  return { ...state, track, tab, editingId: null, scopedFilters,
+    filters: scopedFilters[`${track}:${tab}`] ?? { ...EMPTY_FILTER_FORM, statuses: [] } };
 }

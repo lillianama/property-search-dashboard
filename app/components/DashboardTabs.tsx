@@ -12,6 +12,7 @@ import {
   DEFAULT_APP_URL_STATE,
   parseAppUrlState,
   serializeAppUrlState,
+  switchUrlScope,
   type AppUrlState,
   type FilterFormValue,
   type HousesView,
@@ -25,6 +26,8 @@ import { RejectedView } from "./RejectedView";
 const TABS: Array<{ id: TabId; label: string }> = [
   { id: "market", label: "Market" },
   { id: "search", label: "My Search" },
+  { id: "pending", label: "Pending / Backup" },
+  { id: "sold", label: "Sold" },
   { id: "rejected", label: "Rejected" },
 ];
 
@@ -174,7 +177,8 @@ export function DashboardTabs({
     (tab: TabId) => {
       if (tab === urlState.tab) return;
       // Leaving a tab closes its editor; the destination tab starts clean.
-      applyUrlState({ ...urlState, tab, editingId: null }, "push");
+      setRefresh(INITIAL_REFRESH_STATE);
+      applyUrlState(switchUrlScope(urlState, urlState.track, tab), "push");
     },
     [applyUrlState, urlState],
   );
@@ -230,7 +234,7 @@ export function DashboardTabs({
             onClick={() => {
               if (track === value) return;
               setRefresh(INITIAL_REFRESH_STATE);
-              applyUrlState({ ...urlState, track: value, editingId: null }, "push");
+              applyUrlState(switchUrlScope(urlState, value, urlState.tab), "push");
             }}>
             {value === "house" ? "Houses" : "Plexes"}
           </button>
@@ -272,8 +276,10 @@ export function DashboardTabs({
       {/* Remount the entire view on track changes: data, drafts, maps and optimistic moves stay isolated. */}
       <TrackContext.Provider key={track} value={track}>
         {tab === "market" && <MarketView refreshSeq={refresh.seq} onLoadSettled={handleLoadSettled} />}
-        {tab === "search" && (
+        {(tab === "search" || tab === "pending" || tab === "sold") && (
           <Dashboard
+            key={`${track}:${tab}`}
+            lifecycleView={tab}
             pitiStorageKey={pitiStorageKey}
             view={view}
             onViewChange={setView}
