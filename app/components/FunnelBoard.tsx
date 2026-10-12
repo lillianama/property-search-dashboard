@@ -639,7 +639,7 @@ function FunnelRow({
 
   return (
     <article
-      className={`funnel-row${dragging ? " funnel-row-dragging" : ""}${grabbed ? " funnel-row-grabbed" : ""}${highlighted ? " funnel-row-editor-return" : ""}`}
+      className={`funnel-row${track === "plex" ? " funnel-row-plex" : ""}${dragging ? " funnel-row-dragging" : ""}${grabbed ? " funnel-row-grabbed" : ""}${highlighted ? " funnel-row-editor-return" : ""}`}
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
