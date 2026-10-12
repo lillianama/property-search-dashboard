@@ -15,6 +15,7 @@ import { computePiti, type PitiAssumptions } from "../../lib/piti";
 import type { FunnelBucket, HouseRecord, QuickJudgments, TriStateJudgment } from "../../lib/types";
 import { PlexUnits } from "./PlexUnits";
 import { RejectPropertyDialog } from "./RejectPropertyDialog";
+import { FireworksOverlay } from "./FireworksOverlay";
 import { useTrack } from "./TrackContext";
 import { PropertyPhoto } from "./PropertyPhoto";
 
@@ -97,6 +98,8 @@ export function FunnelBoard({
 }) {
   const groups = useMemo(() => groupByBucket(properties, placements), [properties, placements]);
   const byId = useMemo(() => new Map(properties.map((p) => [p.id, p])), [properties]);
+  const [fireworksId, setFireworksId] = useState<number | null>(null);
+  const clearFireworks = useCallback(() => setFireworksId(null), []);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   // Pointer-drag drop indicator: bucket + insertion index (or the reject zone).
   const [dropIndicator, setDropIndicator] = useState<{ bucket: FunnelBucket; index: number } | null>(null);
@@ -352,6 +355,7 @@ export function FunnelBoard({
 
   return (
     <div className="funnel-board">
+      {fireworksId !== null && <FireworksOverlay key={fireworksId} onDone={clearFireworks} />}
       <p className="section-note">
         Drag a row between or within buckets to set both its bucket and its place in your one global ranking
         {" \u2014 "}order is the ranking; there are no numbers. Keyboard: focus a row{"\u2019"}s handle, press Space
@@ -412,7 +416,10 @@ export function FunnelBoard({
                     onEditNotes={() => onEditNotes(entry)}
                     onBottom={bucket === "watchlist" ? () => onWatchlistBottom(entry) : undefined}
                     bottomMoveBusy={bottomMoveBusy}
-                    onQuickMove={bucket === "watchlist" ? (target) => commitMove(entry, target, 0) : undefined}
+                    onQuickMove={bucket === "watchlist" ? (target) => {
+                      if (target === "top-contenders") setFireworksId((id) => (id ?? 0) + 1);
+                      commitMove(entry, target, 0);
+                    } : undefined}
                   />
                 </li>
               ),
