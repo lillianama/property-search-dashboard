@@ -18,6 +18,7 @@ import type { NeighborhoodZhviRow } from "./types";
 /** The one source whose neighborhood field this dashboard trusts: the
  * PortlandMaps county assessor records. */
 export const ASSESSOR_NEIGHBORHOOD_SOURCE = "portlandmaps-assessor";
+export const USER_NEIGHBORHOOD_CORRECTION_SOURCE = "user-correction";
 
 /** One raw neighborhood-bearing observation row, as read from the store. */
 export interface NeighborhoodObservationRow {
@@ -72,7 +73,8 @@ export const NEIGHBORHOOD_ALIASES: Record<string, string> = {
 
 /**
  * Selects each property's current assessor neighborhood from raw
- * observation rows: portlandmaps-assessor rows only, latest observed_at
+ * observation rows: assessor rows or explicit user corrections. A correction
+ * takes precedence over assessor rows; within each source, latest observed_at
  * wins (row id breaks exact ties), empty/blank values ignored. Properties
  * with no usable assessor row are simply absent from the result — the
  * caller renders them as neighborhood-unknown, never guessed.
@@ -80,14 +82,18 @@ export const NEIGHBORHOOD_ALIASES: Record<string, string> = {
 export function selectAssessorNeighborhoods(rows: NeighborhoodObservationRow[]): Map<string, string> {
   const best = new Map<string, NeighborhoodObservationRow>();
   for (const row of rows) {
-    if (row.source !== ASSESSOR_NEIGHBORHOOD_SOURCE) continue;
+    if (row.source !== ASSESSOR_NEIGHBORHOOD_SOURCE &&
+        row.source !== USER_NEIGHBORHOOD_CORRECTION_SOURCE) continue;
     const value = row.neighborhood?.trim();
     if (!value) continue;
     const existing = best.get(row.propertyId);
-    if (!existing) {
+    if (!existing || (row.source === USER_NEIGHBORHOOD_CORRECTION_SOURCE &&
+        existing.source !== USER_NEIGHBORHOOD_CORRECTION_SOURCE)) {
       best.set(row.propertyId, row);
       continue;
     }
+    if (existing.source === USER_NEIGHBORHOOD_CORRECTION_SOURCE &&
+        row.source !== USER_NEIGHBORHOOD_CORRECTION_SOURCE) continue;
     const rowMs = row.observedAt ? new Date(row.observedAt).getTime() : Number.NEGATIVE_INFINITY;
     const existingMs = existing.observedAt
       ? new Date(existing.observedAt).getTime()
