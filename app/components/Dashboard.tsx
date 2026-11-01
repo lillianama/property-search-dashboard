@@ -415,7 +415,8 @@ export function Dashboard({
                   <PriceDistributionChart data={data.priceDistribution} />
                 </div>
                 <div className="dashboard-section">
-                  <h2>Status distribution</h2>
+                  <h2>Tracked property breakdown</h2>
+                  <p className="section-note">All lifecycle panels for {track === "plex" ? "plexes" : "houses"}, with applied filters. Status filters use listing status, including for rejected properties. Each property counts once.</p>
                   <StatusDistributionChart data={data.statusDistribution} />
                 </div>
               </section>

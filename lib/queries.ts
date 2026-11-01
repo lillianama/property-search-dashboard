@@ -148,8 +148,9 @@ function mapHouseRow(row: HouseRow): HouseRecord {
 /**
  * Fetches every tracked house that matches the non-status filters, plus the
  * last_seen_at freshness window when a date range is supplied. Backs the
- * KPI cards, price/status distributions, map, and table, which all share
- * the same filtered set for consistency.
+ * dashboard before decision and lifecycle scoping. The tracked property
+ * breakdown includes rejected properties and spans lifecycle panels; KPIs,
+ * price distribution, map, table, and history exclude rejected properties.
  *
  * The STATUS filter is deliberately NOT applied here: statuses are resolved
  * from the full listing-event history in lib/status.ts (so explicit Pending
@@ -183,6 +184,7 @@ export async function fetchHouses(filters: HouseFilters, track: PropertyTrack = 
 }
 
 export interface RawListingEvent {
+  eventType?: string | null;
   month: string;
   price: number | null;
 }
@@ -204,7 +206,8 @@ export async function fetchMonthlyListingEvents(
   const sql = `
     SELECT
       to_char(date_trunc('month', e.event_date), 'YYYY-MM') AS month,
-      e.price AS price
+      e.price AS price,
+      e.event_type AS "eventType"
     FROM property_listing_events e
     WHERE e.property_id = ANY($1::uuid[])
       AND e.event_date IS NOT NULL
@@ -216,7 +219,7 @@ export async function fetchMonthlyListingEvents(
   const params = [propertyIds, filters.dateFrom, filters.dateTo];
 
   return withReadOnlyClient(async (client) => {
-    const result = await client.query<{ month: string; price: number | null }>(sql, params);
+    const result = await client.query<RawListingEvent>(sql, params);
     return result.rows;
   });
 }

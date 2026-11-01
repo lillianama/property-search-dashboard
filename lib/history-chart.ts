@@ -1,6 +1,7 @@
 export interface HistoryCount {
   month: string;
   eventCount: number;
+  medianPrice?: number | null;
 }
 
 /** Event months are calendar dates from the source, not observation timestamps. */
@@ -26,12 +27,14 @@ export function buildHistoryView(data: HistoryCount[], allHistory: boolean, now 
     const key = annual ? Math.floor(point.index / 12) : point.index;
     if (key >= start) counts.set(key, (counts.get(key) ?? 0) + point.count);
   }
+  const prices = new Map(data.map(point => [point.month, point.medianPrice]));
   const buckets = Array.from({ length: end - start + 1 }, (_, i) => {
     const key = start + i;
     const label = annual ? String(key) : new Intl.DateTimeFormat("en-US", {
       timeZone: "UTC", month: "short", year: "numeric",
     }).format(new Date(Date.UTC(Math.floor(key / 12), key % 12, 1)));
-    return { label, count: counts.get(key) ?? 0 };
+    const price = annual ? null : prices.get(`${Math.floor(key / 12)}-${String(key % 12 + 1).padStart(2, "0")}`);
+    return { label, count: counts.get(key) ?? 0, medianPrice: typeof price === "number" && Number.isFinite(price) && price > 0 ? price : null };
   });
   const currentLabel = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles", month: "short", year: "numeric",

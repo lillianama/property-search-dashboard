@@ -13,6 +13,7 @@ const STATUS_COLORS: Record<string, string> = {
   Unverified: "#f97316",
   Sold: "#a78bfa",
   Unknown: "#4b5563",
+  Rejected: "#e11d48",
 };
 
 function colorFor(status: string): string {
@@ -86,7 +87,7 @@ export function StatusDistributionChart({ data }: { data: StatusCount[] }) {
     chartRef.current = new Chart(canvas, {
       type: "doughnut",
       data: {
-        labels: data.map((d) => d.status),
+        labels: data.map((d) => d.status === "Rejected" ? "Rejected = your saved decision" : d.status),
         datasets: [
           {
             data: data.map((d) => d.count),
@@ -113,12 +114,19 @@ export function StatusDistributionChart({ data }: { data: StatusCount[] }) {
   }, [data]);
 
   if (data.length === 0) {
-    return <p className="chart-empty">No status data matches the current filters.</p>;
+    return <p className="chart-empty">No tracked properties match the current filters.</p>;
   }
 
   return (
-    <div className="chart-canvas-wrap">
-      <canvas ref={canvasRef} role="img" aria-label="Status distribution of tracked houses" />
-    </div>
+    <>
+      <div className="chart-canvas-wrap">
+        <canvas ref={canvasRef} role="img" aria-label={`Tracked property breakdown. Each property counts once. ${data.map(d => `${d.status}: ${d.count}`).join(". ")}. Rejected = your saved decision; other categories show current listing status.`} />
+      </div>
+      <details>
+        <summary>View breakdown as text</summary>
+        <p>Rejected = your saved decision. Other categories show current listing status.</p>
+        <ul>{data.map(d => <li key={d.status}>{d.status}: {d.count}</li>)}</ul>
+      </details>
+    </>
   );
 }

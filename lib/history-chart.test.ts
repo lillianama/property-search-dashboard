@@ -8,16 +8,16 @@ describe("historical record calendar views", () => {
   it("anchors 12 consecutive months to today across year rollover, filling gaps", () => {
     const view = buildHistoryView([point("1985-01"), point("2025-02", 2), point("2026-01")], false, now);
     expect(view.buckets).toHaveLength(12);
-    expect(view.buckets[0]).toEqual({ label: "Feb 2025", count: 2 });
+    expect(view.buckets[0]).toEqual({ label: "Feb 2025", count: 2, medianPrice: null });
     expect(view.buckets[1].count).toBe(0);
-    expect(view.buckets[11]).toEqual({ label: "Jan 2026", count: 1 });
+    expect(view.buckets[11]).toEqual({ label: "Jan 2026", count: 1, medianPrice: null });
     expect(view.total).toBe(3);
   });
   it("preserves 1985 with consecutive yearly spacing and zero years", () => {
     const view = buildHistoryView([point("1985-03"), point("1985-12", 2), point("2026-01")], true, now);
     expect(view.buckets).toHaveLength(42);
-    expect(view.buckets[0]).toEqual({ label: "1985", count: 3 });
-    expect(view.buckets[1]).toEqual({ label: "1986", count: 0 });
+    expect(view.buckets[0]).toEqual({ label: "1985", count: 3, medianPrice: null });
+    expect(view.buckets[1]).toEqual({ label: "1986", count: 0, medianPrice: null });
     expect(view.total).toBe(4);
   });
   it("keeps an empty recent window anchored to today even with only old data", () => {
@@ -43,4 +43,11 @@ describe("historical record calendar views", () => {
     expect(after.buckets[11].label).toBe("Jan 2026");
     expect(after.total).toBe(10);
   });
+});
+
+it("keeps monthly sale prices and missing calendar months null, with no annual median of medians", () => {
+  const data = [{ month: "2025-11", eventCount: 2, medianPrice: 400000 }, { month: "2026-01", eventCount: 1, medianPrice: 600000 }];
+  const recent = buildHistoryView(data, false, now);
+  expect(recent.buckets.slice(-3).map(b => b.medianPrice)).toEqual([400000, null, 600000]);
+  expect(buildHistoryView(data, true, now).buckets.every(b => b.medianPrice === null)).toBe(true);
 });

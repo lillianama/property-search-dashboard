@@ -192,7 +192,7 @@ describe("buildDashboardResponse photo shaping", () => {
 });
 
 describe("buildDashboardResponse rejection exclusion", () => {
-  it("excludes a rejected house from the table, KPIs, and distributions", async () => {
+  it("excludes a rejected house from the table, KPIs, and price distribution", async () => {
     vi.mocked(fetchHouses).mockResolvedValue([
       house({ id: "prop-1", latestPrice: 400000 }),
       house({ id: "prop-2", address: "456 NE Other Ave", latestPrice: 600000 }),
@@ -210,7 +210,7 @@ describe("buildDashboardResponse rejection exclusion", () => {
     expect(response.priceDistribution.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(1);
   });
 
-  it("passes only the surviving property ids to fetchMonthlyListingEvents so charts exclude rejected houses", async () => {
+  it("passes only the surviving property ids to fetchMonthlyListingEvents so history excludes rejected houses", async () => {
     vi.mocked(fetchHouses).mockResolvedValue([house({ id: "prop-1" }), house({ id: "prop-2" })]);
     vi.mocked(fetchLatestDecisionRows).mockResolvedValue([
       { propertyId: "prop-2", verdict: "rejected", note: null, occurredAt: "2026-07-17T02:00:00Z" },
@@ -531,5 +531,45 @@ describe("inactive lifecycle resolution", () => {
     vi.mocked(fetchStatusEventRows).mockResolvedValue([...events, { propertyId: "inactive", status: "Active", source: "rmls", id: 5, eventDate: "2026-07-05", observedAt: "2026-07-05" }]);
     expect((await buildDashboardResponse(NO_FILTERS, track)).properties[0]).toMatchObject({ id: "inactive", rankKey: "k", funnelBucket: "top-contenders", judgments: inactive.judgments });
     expect(inactive).toMatchObject({ displayStatus: "Active", rankKey: "k" });
+  });
+});
+
+describe.each(["house", "plex"] as const)("cross-panel status scope for %s", track => {
+  it("uses resolved statuses across panels while keeping property and KPI membership current", async () => {
+    vi.mocked(fetchHouses).mockResolvedValue([
+      house({ id: "active" }), house({ id: "pending" }), house({ id: "sold" }),
+      house({ id: "unknown", displayStatus: "Unknown", latestStatus: null }),
+      ...["Active", "Pending", "Sold", "Inactive", "Unknown"].map(status => house({ id: `rejected-${status}`, displayStatus: "Active" })),
+    ]);
+    vi.mocked(fetchStatusEventRows).mockResolvedValue([
+      { propertyId: "pending", status: "under contract", source: "rmls", eventDate: "2026-01-01", observedAt: null, id: 1 },
+      { propertyId: "sold", status: "closed", source: "rmls", eventDate: "2026-01-01", observedAt: null, id: 2 },
+      ...["Active", "Pending", "Sold", "Inactive", "Unknown"].map((status, i) => ({ propertyId: `rejected-${status}`, status, source: "rmls", eventDate: "2026-01-01", observedAt: null, id: i + 3 })),
+    ]);
+    vi.mocked(fetchLatestDecisionRows).mockResolvedValue([
+      ...["Active", "Pending", "Sold", "Inactive", "Unknown"].map(status => ({ propertyId: `rejected-${status}`, verdict: "reject", note: null, occurredAt: "2026-01-01" })),
+    ]);
+    const filters = { ...NO_FILTERS, minBedrooms: 3, dateFrom: "2025-01-01" };
+    for (const panel of ["search", "pending", "sold"] as const) {
+      const response = await buildDashboardResponse(filters, track, panel);
+      expect(fetchHouses).toHaveBeenLastCalledWith(filters, track);
+      expect(response.statusDistribution).toEqual([
+        { status: "Rejected", count: 5 },
+        { status: "Active", count: 1 }, { status: "Pending", count: 1 },
+        { status: "Sold", count: 1 }, { status: "Unknown", count: 1 },
+      ]);
+      const ids = panel === "search" ? ["active", "unknown"] : [panel];
+      expect(response.properties.map(h => h.id)).toEqual(ids);
+      expect(response.summary.knownHouses).toBe(ids.length);
+      expect(fetchMonthlyListingEvents).toHaveBeenLastCalledWith(filters, ids);
+    }
+    const selected = await buildDashboardResponse({ ...filters, statuses: ["Pending"] }, track);
+    expect(selected.statusDistribution).toEqual([{ status: "Pending", count: 1 }, { status: "Rejected", count: 1 }]);
+    for (const status of ["Active", "Sold", "Inactive", "Unknown"]) {
+      const filtered = await buildDashboardResponse({ ...filters, statuses: [status] }, track);
+      expect(filtered.statusDistribution.find(bucket => bucket.status === "Rejected")?.count).toBe(1);
+      expect(filtered.statusDistribution.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(status === "Inactive" ? 1 : 2);
+    }
+    expect(selected.properties).toEqual([]);
   });
 });

@@ -146,9 +146,9 @@ describe("buildPriceDistribution", () => {
 describe("buildMonthlyHistory", () => {
   it("groups events by month with count and median price", () => {
     const result = buildMonthlyHistory([
-      { month: "2026-01", price: 400_000 },
-      { month: "2026-01", price: 420_000 },
-      { month: "2026-02", price: 500_000 },
+      { month: "2026-01", eventType: "sold", price: 400_000 },
+      { month: "2026-01", eventType: "sold", price: 420_000 },
+      { month: "2026-02", eventType: "sold", price: 500_000 },
     ]);
     expect(result).toEqual([
       { month: "2026-01", eventCount: 2, medianPrice: 410_000 },
@@ -158,23 +158,23 @@ describe("buildMonthlyHistory", () => {
 
   it("still counts events with a null price, without corrupting the median", () => {
     const result = buildMonthlyHistory([
-      { month: "2026-03", price: null },
-      { month: "2026-03", price: 300_000 },
+      { month: "2026-03", eventType: "sold", price: null },
+      { month: "2026-03", eventType: "sold", price: 300_000 },
     ]);
     expect(result[0]).toEqual({ month: "2026-03", eventCount: 2, medianPrice: 300_000 });
   });
 
   it("sorts months chronologically ascending", () => {
     const result = buildMonthlyHistory([
-      { month: "2026-05", price: 1 },
-      { month: "2024-01", price: 1 },
-      { month: "2025-11", price: 1 },
+      { month: "2026-05", eventType: "sold", price: 1 },
+      { month: "2024-01", eventType: "sold", price: 1 },
+      { month: "2025-11", eventType: "sold", price: 1 },
     ]);
     expect(result.map((r) => r.month)).toEqual(["2024-01", "2025-11", "2026-05"]);
   });
 
   it("skips events without a month", () => {
-    const result = buildMonthlyHistory([{ month: "", price: 1 }]);
+    const result = buildMonthlyHistory([{ month: "", eventType: "sold", price: 1 }]);
     expect(result).toEqual([]);
   });
 });
@@ -221,4 +221,19 @@ describe("summarizeStatusCounts", () => {
     const result = summarizeStatusCounts(["active", "Active", "PENDING", "Sold", "Weird", null]);
     expect(result).toEqual({ active: 2, pending: 1, inactive: 0, unverified: 0, sold: 1, unknown: 2 });
   });
+});
+
+it("counts every event but prices only explicit sold events with known positive prices", () => {
+  expect(buildMonthlyHistory([
+    { month: "2026-01", eventType: "listed", price: 900000 },
+    { month: "2026-01", eventType: "status", price: 800000 },
+    { month: "2026-01", price: 700000 },
+    { month: "2026-01", eventType: "sold", price: 400000 },
+    { month: "2026-01", eventType: "sold", price: 600000 },
+    { month: "2026-02", eventType: "sold", price: null },
+    { month: "2026-02", eventType: "sold", price: 0 },
+  ])).toEqual([
+    { month: "2026-01", eventCount: 5, medianPrice: 500000 },
+    { month: "2026-02", eventCount: 2, medianPrice: null },
+  ]);
 });

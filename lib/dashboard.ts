@@ -75,12 +75,14 @@ function emptyDashboardResponse(dbAvailable: boolean, track: PropertyTrack): Das
  *
  * Rejected houses (an explicit human rejection decision was the latest
  * decision recorded for that property — see lib/rejection.ts) are excluded
- * from every part of this response: KPIs, history, distributions, the map,
- * and the table. They still exist in the property store and remain visible
+ * from KPIs, history, price distribution, the map, and the table. The tracked
+ * property breakdown includes them as a separate saved-decision category.
+ * They still exist in the property store and remain visible
  * in the separate Rejected archive (lib/rejected.ts).
  */
 export async function buildDashboardResponse(filters: HouseFilters, track: PropertyTrack = "house", lifecycleView: LifecycleView = "search"): Promise<DashboardResponse> {
   let allHouses: HouseRecord[];
+  let statusDistribution: DashboardResponse["statusDistribution"];
   let events;
   let trackedTotals;
   try {
@@ -107,7 +109,12 @@ export async function buildDashboardResponse(filters: HouseFilters, track: Prope
 
     const decisionRows = await fetchLatestDecisionRows(allHouses.map((h) => h.id));
     const rejections = computeRejections(decisionRows);
-    const { active } = partitionByRejection(allHouses, rejections);
+    const { active, rejected } = partitionByRejection(allHouses, rejections);
+    // Decision precedence is chart-only: never normalize it as an MLS status
+    // or count the rejected property again under its resolved listing status.
+    statusDistribution = buildStatusDistribution(active.map(house => house.displayStatus));
+    if (rejected.length) statusDistribution.push({ status: "Rejected", count: rejected.length });
+    statusDistribution.sort((a, b) => b.count - a.count || a.status.localeCompare(b.status));
     allHouses = filterLifecycle(active, lifecycleView);
     [events, trackedTotals] = await Promise.all([
       fetchMonthlyListingEvents(filters, allHouses.map((h) => h.id)),
@@ -236,8 +243,8 @@ export async function buildDashboardResponse(filters: HouseFilters, track: Prope
   const withoutStoredPhoto = housesWithPhotos.filter((h) => h.photoUrl === null);
   const streetViewEligible = withoutStoredPhoto.filter((h) => choosePhotoDisplay(h) === "street-view").length;
 
-  // KPIs and the status chart count RESOLVED display statuses so they agree
-  // with the pills on the map and cards.
+  // KPIs retain current-panel membership. The distribution above counts
+  // resolved statuses across panels before lifecycle filtering.
   const statuses = houses.map((h) => h.displayStatus);
   const statusCounts = summarizeStatusCounts(statuses);
 
@@ -256,7 +263,7 @@ export async function buildDashboardResponse(filters: HouseFilters, track: Prope
     },
     history: buildMonthlyHistory(events),
     priceDistribution: buildPriceDistribution(houses.map((h) => h.latestPrice)),
-    statusDistribution: buildStatusDistribution(statuses),
+    statusDistribution,
     properties: housesWithPhotos,
     meta: {
       generatedAt: new Date().toISOString(),

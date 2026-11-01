@@ -137,6 +137,7 @@ export function buildPriceDistribution(
 }
 
 export interface ListingEventInput {
+  eventType?: string | null;
   month: string; // "YYYY-MM"
   price: Nullish<number>;
 }
@@ -148,7 +149,7 @@ export interface MonthlyBucket {
 }
 
 /** Groups listing events by their pre-computed calendar month into event
- * counts and median price, sorted chronologically ascending. This backs the
+ * counts and median recorded sold-event price, sorted chronologically ascending. This backs the
  * "tracked/researched dataset" history chart, not full MLS inventory. */
 export function buildMonthlyHistory(events: ListingEventInput[]): MonthlyBucket[] {
   const byMonth = new Map<string, number[]>();
@@ -156,7 +157,9 @@ export function buildMonthlyHistory(events: ListingEventInput[]): MonthlyBucket[
     if (!event.month) continue;
     const list = byMonth.get(event.month) ?? [];
     const price = safeNumber(event.price);
-    if (price !== null) list.push(price);
+    // Only explicit sold events carry the recorded sale-price contract.
+    // Status snapshots may retain asking prices even when marked Sold.
+    if (event.eventType === "sold" && price !== null && price > 0) list.push(price);
     if (!byMonth.has(event.month)) byMonth.set(event.month, list);
   }
 

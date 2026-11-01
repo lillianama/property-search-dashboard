@@ -28,6 +28,15 @@ export function HistoryChart({ data }: { data: HistoryChartPoint[] }) {
       data: {
         labels: view.buckets.map((d) => d.label),
         datasets: [
+          ...(!view.annual ? [{
+            type: "line" as const,
+            label: "Median recorded sold price",
+            data: view.buckets.map(d => d.medianPrice),
+            borderColor: "#8b5cf6",
+            backgroundColor: "#8b5cf6",
+            spanGaps: false,
+            yAxisID: "price",
+          }] : []),
           {
             type: "bar",
             label: "Historical records",
@@ -43,6 +52,12 @@ export function HistoryChart({ data }: { data: HistoryChartPoint[] }) {
         maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
         scales: {
+          ...(!view.annual ? { price: {
+            type: "linear" as const, position: "right" as const,
+            title: { display: true, text: "Median sold price ($)" },
+            grid: { drawOnChartArea: false },
+            ticks: { callback: value => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact" }).format(Number(value)) },
+          } } : {}),
           count: {
             type: "linear",
             position: "left",
@@ -58,7 +73,10 @@ export function HistoryChart({ data }: { data: HistoryChartPoint[] }) {
           },
         },
         plugins: {
-          legend: { display: false },
+          legend: { display: !view.annual },
+          tooltip: { callbacks: { label: context => context.dataset.yAxisID === "price"
+            ? `Median sold price: ${(context.parsed.y === null ? "Unknown" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(context.parsed.y))}`
+            : `Historical records: ${context.parsed.y}` } },
         },
       },
     });
@@ -78,15 +96,16 @@ export function HistoryChart({ data }: { data: HistoryChartPoint[] }) {
       <p className="section-note" role="status">
         {view.range} · {view.total} historical {view.total === 1 ? "record" : "records"} · {view.annual ? "Yearly" : "Monthly"} counts
       </p>
+      <p className="section-note">{view.annual ? "Yearly record counts only; switch to Last 12 months for monthly median sold prices." : "Monthly median recorded sale price. Missing sale prices leave gaps."}</p>
       {view.total === 0 && <p className="chart-empty">
         {allHistory ? "No dated historical records match the current filters." : "No historical records in these 12 months. Choose All history to explore earlier records for these homes."}
       </p>}
       <div className="chart-canvas-wrap">
-        <canvas ref={canvasRef} role="img" aria-label={`Historical listing and sale record counts, ${view.range}. ${view.total} records.`} />
+        <canvas ref={canvasRef} role="img" aria-label={`Historical listing and sale record counts, ${view.range}. ${view.total} records.${view.annual ? "" : " Monthly median recorded sold prices; missing prices are gaps."}`} />
       </div>
       <details className="history-values">
-        <summary>View record counts as text</summary>
-        <ul>{view.buckets.map((bucket) => <li key={bucket.label}>{bucket.label}: {bucket.count}</li>)}</ul>
+        <summary>View history as text</summary>
+        <ul>{view.buckets.map((bucket) => <li key={bucket.label}>{bucket.label}: {bucket.count}{!view.annual && ` · Median sold price: ${bucket.medianPrice === null ? "Unknown" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(bucket.medianPrice)}`}</li>)}</ul>
       </details>
     </>
   );
