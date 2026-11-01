@@ -1,10 +1,29 @@
-# Property Search Dashboard
+# 💜 Nova Nest · Dashboard
 
-A standalone Next.js dashboard for researching houses and plexes against an external PostgreSQL property store. The current regional enrichment and market-data adapters are configured for Portland, Oregon; those Portland-specific assumptions are called out below rather than implied as universal behavior. The code is public, but any live dashboard and its property data remain private and must stay behind external authentication. This repository contains application code, synthetic tests, and schema-only SQL; it contains no property records, research workflow, user data, or database backup.
+**A cozy command center for your next home (or next plex).**
 
-## Setup
+House hunting has enough tabs. This one helps you remember why you liked the kitchen—and why you absolutely did not like the basement.
 
-Requires Node.js 22 or newer with npm, or Docker Engine with Docker Compose v2. PostgreSQL must be separately provisioned and reachable from your chosen runtime. A schema-only initializer is included for fresh installations; it does not recreate any research workflow or import data. No database container or property research/ingestion pipeline is included.
+Nova Nest is a self-hosted property-search dashboard built with Next.js and PostgreSQL. Keep **Houses** and **Plexes** in separate search tracks, compare the numbers, and move promising places from “hmm” to “let’s tour.” Its regional market and enrichment adapters currently target **Portland, Oregon**.
+
+## 🏡 What's in the nest?
+
+- **Your shortlist, organized:** Top contenders, To tour, Watchlist, and a Rejected archive with reconsideration. Drag, drop, or use the keyboard; decisions keep their history.
+- **The big picture:** filtered lists, an interactive map, KPIs, price/status charts, and shareable view URLs. Filters stay put through refreshes. Finally, a little object permanence.
+- **Notes that remember:** remarks, pros, cons, and tri-state judgments with revision history and unsaved-change protection.
+- **Numbers with boundaries:** editable PITI assumptions and recorded taxes; plex rent summaries and estimated rent-minus-PITI comparisons when whole-building data is complete and comparable. This is not a full operating-profit model. Missing facts stay unknown—not magically zero.
+- **Useful context:** stored listing photos, published bedroom measurements/flags, listing history, and optional labeled Google Street View fallback.
+- **A market reality check:** optional Zillow Research single-family city and neighborhood series for Portland. Plex market data is explicitly unavailable; houses do not get to impersonate duplexes.
+
+### Two little helpers, one nest
+
+This repo is the place to **review, compare, and decide**. The companion [Nova Nest browser extension](https://github.com/lillianama/property-search-browser-extension) reads supported Zillow listing pages you open and sends validated observations to your dashboard. It can offer an explicit **Add to Watchlist** action for eligible untracked listings; browsing alone never creates a property.
+
+The dashboard also works without the extension. Neither repo includes a complete property-discovery/research pipeline or a ready-filled database.
+
+## 🚀 Get it running
+
+Requires **Node.js 22+ and npm**, or **Docker Engine + Compose v2**. Provision PostgreSQL separately; no database container is bundled.
 
 ```sh
 cp .env.example .env
@@ -12,7 +31,20 @@ npm ci
 npm run dev -- --hostname 127.0.0.1
 ```
 
-Next.js reads `.env` for local development. For containers, Compose injects the listed environment variables at runtime. Set `DATABASE_URL` to your own external database URL; leave it empty to explore the database-unavailable UI. Inside a container, `localhost` refers to the container, not the database host. Use a reachable database hostname and configure PostgreSQL TLS and permissions as appropriate for your infrastructure.
+Open <http://localhost:3000>. Set `DATABASE_URL` in your untracked `.env` to your compatible property store, or leave it empty to explore the database-unavailable UI. An empty database is not a secret demo catalog. It is just empty. Very minimalist.
+
+For a **fresh database**, review and apply the schema explicitly with a schema-capable role and securely supplied `DATABASE_URL`:
+
+```sh
+npm run schema:base       # fresh databases only; never over an existing store
+npm run schema:editor
+npm run schema:rank-prefs
+npm run schema:market
+```
+
+These create structure, not property records. `pgcrypto` may require an administrator. The web process never runs DDL; an existing store needs only compatible additive migrations, not the base initializer.
+
+Prefer containers? After configuring `.env`:
 
 ```sh
 docker compose config --quiet
@@ -20,79 +52,61 @@ docker compose build web
 docker compose up -d web
 ```
 
-Visit `http://localhost:3000`. The portable default Compose setup publishes the app on loopback only; `WEB_PORT` changes the host port and `WEB_BIND_ADDRESS` changes the published host interface (default `127.0.0.1`). For a host-network reverse-proxy deployment, use `docker compose -f compose.yaml -f compose.host-network.yaml up -d web` and set `WEB_HOSTNAME` to a private host interface address and `WEB_PORT` to an available port. The override removes port publishing and makes the app bind directly to that configured address. Keep this listener private and reachable only by the authenticated reverse proxy; do not bind it to a public/LAN interface. The app has **no built-in authentication**: put an authenticated TLS reverse proxy in front of it before allowing remote access. Same-origin checks protect write requests but do not authenticate users. All users of a deployment share its database and notes.
+The default publishes on loopback at port 3000. `WEB_PORT` changes the host port; a container's `localhost` is the container itself, so use a database hostname it can actually reach.
 
-Secrets belong only in an untracked local `.env` or runtime environment. Build stages need no database credentials or Google key. The Docker build context uses an allowlist that excludes Git metadata and environment files. Do not put secrets or user data in source directories. The web and optional ingest images run as the unprivileged Node user.
+## 🔐 Public code, private nest
 
-## Database schema and external contract
+There is **no built-in user authentication**. Keep the listener private and put an authenticated TLS reverse proxy in front of remote access. Same-origin checks are not login, and everyone using a deployment shares its database and notes.
 
-This repository includes schema-only initialization for a fresh database, but not the private research workflow, property records, or their provenance history. The base schema in `scripts/schema/property-store-schema.sql` defines tables, indexes, views, and required extension only. It has no data inserts. Review the SQL and run it explicitly with a PostgreSQL schema-capable role; the web process never executes DDL. `CREATE EXTENSION pgcrypto` may require a database administrator.
+Keep credentials, property records, and private research out of Git. Use an untracked `.env` or runtime environment; no secrets are needed for image builds. This repo contains application code, schema SQL, and synthetic tests—not anybody's housing diary.
 
-For a fresh compatible PostgreSQL database, apply the base schema, then the additive dashboard schemas. For an existing private property store, do not apply the base schema; apply only needed additive migrations after checking compatibility. These operations do not load or alter property data.
+The extension uses a separate scoped token, an allowed extension ID, and a restricted database role. It captures allowlisted listing facts with provenance, not your dashboard notes or judgments. Exact identity checks reject conflicts; apartment-only facts must not become whole-property facts just because the street address looks familiar.
+
+<details>
+<summary>🔧 Connecting the extension and other setup details</summary>
+
+### Browser observations
+
+1. Provision a dedicated PostgreSQL LOGIN role named `browser_observation_writer`, without inherited application privileges. As the trusted schema owner, review and apply [scripts/browser-observation-schema.sql](scripts/browser-observation-schema.sql) after the property/editor/ranking schemas. It grants execution on validated functions, not direct table access.
+2. Set `BROWSER_OBSERVATION_DATABASE_URL` for that role, a strong private `BROWSER_OBSERVATION_TOKEN`, and `BROWSER_OBSERVATION_EXTENSION_ID` from Chrome. All three are required; the API stays disabled otherwise. See [.env.example](.env.example).
+3. Configure the authenticated TLS proxy so the extension can reach `OPTIONS` and bearer-authenticated `POST /api/browser-observations` without an interactive login redirect. Preserve authentication on dashboard pages; the endpoint checks its own token and extension origin.
+4. Follow the [extension setup](https://github.com/lillianama/property-search-browser-extension#-let-it-perch-in-chrome). Recognition and capture are separate: an exact apartment-range alias may report a tracked whole property while apartment capture and Add remain blocked.
+
+### Database and runtime contract
+
+The schema-only [base SQL](scripts/schema/property-store-schema.sql) defines property records, identifiers, observations, source snapshots, listing events, bedroom flags, interactions, and collections. Exact read contracts live in [lib/queries.ts](lib/queries.ts) and [lib/market-queries.ts](lib/market-queries.ts); normal editor/funnel writes live in [lib/editor-writes.ts](lib/editor-writes.ts) and [lib/funnel-writes.ts](lib/funnel-writes.ts).
+
+The normal web role needs SELECT on queried relations and narrowly scoped note, judgment, ranking, interaction, and collection writes, sequence USAGE, and row-lock permissions used by those modules. It needs no DDL or DELETE. Browser observations use the separate execute-only role above. `/api/health` reports process liveness; `/api/db-health` checks database connectivity. Missing enrichments render incomplete states.
+
+PITI settings are shared across tracks and stored locally in the browser. Current illustrative defaults: 5% down, 30 years, 7.25% note rate, $1,200/year insurance, and 0.36% annual PMI; HOA is excluded. `PROPERTY_SEARCH_DASHBOARD_PITI_STORAGE_KEY` can preserve an existing same-origin key. Defaults are editable assumptions, not a live loan quote.
+
+Optional `GOOGLE_CLOUD_API_KEY` enables server-side Street View Static API fallback; images are labeled and loaded lazily, without persisting their bytes. Maps use MapLibre and OpenStreetMap tiles, so those features involve external services.
+
+For a host-network reverse proxy, use [compose.host-network.yaml](compose.host-network.yaml) with the base Compose file. Set `WEB_HOSTNAME` to a private interface reachable only by the authenticated proxy and `WEB_PORT` to an available port:
 
 ```sh
-# From the project root, with DATABASE_URL supplied securely in the shell/runtime
-npm run schema:base       # fresh database only
-npm run schema:editor
-npm run schema:rank-prefs
-npm run schema:market
+docker compose -f compose.yaml -f compose.host-network.yaml up -d web
 ```
 
-The same explicit schema scripts are available in the optional maintenance image. The editor and ranking migrations are append-only/additive; market schema creates only the market tables. `npm run ingest` / the market-ingest Compose profile is a separate, manually invoked data-ingestion operation.
+</details>
 
-This dashboard expects the following property-store contract after schema setup (the base SQL supplies its structural tables/views, not records): The authoritative SELECT contracts are in `lib/queries.ts` and `lib/market-queries.ts`; write contracts are in `lib/editor-writes.ts` and `lib/funnel-writes.ts`.
+## 📈 Optional market snack
 
-The property store must expose:
-
-- `property_current`: property UUID `id`, `track` (`house` or `plex`), `canonical_address`, `city`, `state`, `zip_code`, coordinates, numeric JSONB observations (`bedrooms`, `bathrooms`, `finished_sqft`, `year_built`), latest listing/sale fields, and first/last-seen timestamps.
-- `property_records`: the underlying property identity and track used to validate and lock writes.
-- `property_bedroom_flags`, `property_identifiers`, `property_listing_events`, `property_observations`, and `property_source_snapshots`: measurements, listing URLs, status history, and allowlisted photo/tax/neighborhood source fields.
-- `property_interactions` and `property_collections`: decisions and collection memberships used by the funnel and rejected archive.
-
-Consult the SQL in the modules above for exact columns and types before connecting an independently implemented store. The included base schema is structural only; it does not provide the private research workflow, seed data, or historical provenance records. No database connection is required to build or run unit tests.
-
-For the optional maintenance container, set `MARKET_DATABASE_URL` securely to the target database. It is passed as runtime configuration, never baked into the image:
-
-The web role needs SELECT on the referenced relations, INSERT on editor notes/judgments, rank revisions, interactions and collections, and UPDATE on collections for membership changes, plus USAGE on associated sequences and UPDATE on the identifier column of property_records for row-level transaction locks. The app never changes source-fact columns. It does not need DDL or DELETE. Read paths set session read-only mode; the two validated write endpoints use explicit transactions. Missing optional enrichments render unknown/incomplete states. `/api/health` reports process liveness; `/api/db-health` separately checks database connectivity.
-
-## Houses and Plexes
-
-The mode switch persists `track=house` or `track=plex` in the URL. Each mode has its own tracked results, KPIs, charts, map, funnel ranks, rejection archive, editor requests and photo lookups. PITI assumptions are global across both modes, matching the original dashboard behavior. The browser key defaults to a generic project-specific name; deployments may set `PROPERTY_SEARCH_DASHBOARD_PITI_STORAGE_KEY` at runtime to preserve an existing same-origin key without publishing it in this repository. Switching modes remounts the view to isolate loaded data, drafts and optimistic changes. Writes validate property and neighbor membership in the selected track. Properties without a collection appear in Watchlist without writing a membership.
-
-The Market tab currently displays Zillow Research single-family data for Portland, Oregon Houses. Portland assessor-neighborhood matching, regional bounds for Street View fallback, and the ingestion filters are Portland-specific code configuration; changing the market region requires updating those adapters and their tests. Plexes explicitly reports market data unavailable; it never substitutes single-family metrics or neighborhood valuations as plex data.
-
-## Features
-
-- My Search filters apply to KPIs, status/history/price charts and Map/List views. MapLibre uses OpenStreetMap tiles, with accessible marker quick views and Edit/Reject actions.
-- The list provides keyboard and pointer drag-and-drop across Top contenders, To tour, Watchlist and a confirmation-based Rejected target. Fractional rank revisions are append-only, serialized with an advisory lock; stale neighbor order returns a conflict and rolls back the optimistic UI.
-- Rejected properties appear only in the archive when their latest explicit decision is a rejection. Later reconsideration restores the property without deleting history.
-- The editor saves Remarks, Pros, Cons and three tri-state judgments as append-only revisions, with unsaved-change protection and immediate confirmed updates.
-- Status resolution distinguishes generic inactive-feed observations from explicit pending/sold/relisting evidence. Date added comes from the property store, independently of listing dates.
-- PITI uses editable local assumptions, actual recorded taxes only, and an explicit incomplete state when tax data is absent. Defaults are illustrative: 5% down, 30 years, 6.5% note rate, $1,200 annual insurance and 0.36% annual PMI; HOA is excluded. Stored settings are versioned and migrated.
-- Photos come from allowlisted stored fields. Optional server-side Google Street View fallback requires `GOOGLE_CLOUD_API_KEY` with Street View Static API enabled. It remains visibly labeled, loads lazily, and does not persist image bytes. Without the key, a placeholder remains available.
-- Assessor neighborhoods join to Zillow regions by normalized names and explicit aliases; unknown matches stay unknown. RMLS sources are recognized by the generic `rmls` source family.
-- Tabs, filters, Map/List view, track and editor selection survive URL restoration; Back/Forward, scroll restoration, refresh feedback and editor-return highlighting remain available.
-
-## Optional market ingestion
-
-The manually invoked profile downloads official public Zillow Research monthly CSVs and upserts Portland, Oregon single-family city metrics and neighborhood ZHVI into `market_metric_series`; `market_ingest_runs` records outcomes. Apply the idempotent additive schema in `scripts/market-schema.sql` separately with a schema-capable role before the first ingestion. The ingestion process never runs DDL and needs only SELECT, INSERT, UPDATE and sequence USAGE on its two market tables. It does not modify property-store records. This is not a research workflow migration. Nothing schedules ingestion automatically.
+With the market schema applied, supply a separate `MARKET_DATABASE_URL` role with SELECT/INSERT/UPDATE and sequence USAGE on the two market tables, then run:
 
 ```sh
 docker compose --profile market-ingest run --rm market-ingest
-# If using the private host-network deployment, include its override:
-# docker compose -f compose.yaml -f compose.host-network.yaml --profile market-ingest run --rm market-ingest
 ```
 
-Until ingestion runs, market panels report missing data. Preference-match defaults can be overridden with the three `MARKET_PREF_*` variables in `.env.example`. This summary counts tracked properties only, not the full market. The UI reports data age and limited coverage.
+For host networking, include the same override as above. Ingestion downloads public Zillow monthly CSVs into market tables; it does not refresh individual listings or plex data, modify property records, run DDL, or schedule itself. Panels show missing/stale data honestly. `MARKET_PREF_*` variables tune the tracked-property preference summary, not citywide inventory. Changing regions requires adapter changes—not just wishing very hard at an environment variable.
 
-## Verification and provenance
+## 🧪 Check the nest
 
 ```sh
 npm test
 npm run typecheck
 npm run build
 docker compose --profile market-ingest config --quiet
-# Optional: inspect schema SQL for data-changing statements before applying
 ```
 
-Tests use synthetic records and mocked database clients. They cover track query/API/write isolation, market separation, ranking, notes, status, rejection, photos, PITI, URL state and interaction helpers. These checks do not establish connectivity to a real property store or replace browser/deployment testing.
+No database is required for builds or unit tests. Synthetic/mocked checks cover search tracks, ranking, notes, status, photos, finances, and URL state; real database/browser integration still needs its own configured environment.
