@@ -14,7 +14,7 @@ import { buildStreetViewLabel, choosePhotoDisplay } from "../../lib/streetview";
 import type { HouseRecord } from "../../lib/types";
 
 const STATUS_COLORS: Record<string, string> = {
-  Active: "#34d399",
+  Active: "#4c1d95",
   Pending: "#fbbf24",
   Inactive: "#94a3b8",
   Unverified: "#f97316",

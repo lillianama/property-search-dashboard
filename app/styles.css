@@ -631,7 +631,7 @@ a {
   height: 16px;
   padding: 0;
   border-radius: 50%;
-  background: var(--marker-color, #4b5563);
+  background: var(--marker-color, #4c1d95);
   border: 2px solid #f8f5fc;
   box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.35);
   cursor: pointer;
