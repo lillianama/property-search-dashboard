@@ -16,27 +16,40 @@ CREATE TABLE IF NOT EXISTS public.browser_observation_history (
 );
 
 -- Resolve exact identifiers only. No address guesses, intake, or record merges.
--- Both independent legacy anchors are required before persisting a missing zpid.
+-- Legacy source URLs must match exactly (case-insensitive, optional stored ZIP).
+-- Parcel/MLS evidence remains independently checked when supplied.
 CREATE OR REPLACE FUNCTION public.resolve_browser_observation_identity(observation jsonb)
 RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 DECLARE
   evidence jsonb := observation->'identity';
-  ids uuid[]; parcels uuid[]; listings uuid[]; tracked uuid; legacy boolean := false;
+  ids uuid[]; sources uuid[]; parcels uuid[]; listings uuid[]; tracked uuid; legacy boolean := false;
 BEGIN
   IF observation ? 'identity' THEN
     IF jsonb_typeof(evidence) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'invalid identity' USING ERRCODE='22023'; END IF;
-    IF (SELECT count(*) FROM jsonb_object_keys(evidence))<>2
-      OR NOT evidence ?& ARRAY['parcelId','mlsNumber']
-      OR jsonb_typeof(evidence->'parcelId') IS DISTINCT FROM 'string'
-      OR jsonb_typeof(evidence->'mlsNumber') IS DISTINCT FROM 'string'
-      OR evidence->>'parcelId' !~ '^[A-Za-z0-9-]{1,40}$'
-      OR evidence->>'mlsNumber' !~ '^[A-Za-z0-9-]{1,40}$'
+    IF EXISTS (SELECT 1 FROM jsonb_object_keys(evidence) k WHERE k NOT IN ('parcelId','mlsNumber','legacyUrl'))
+      OR (NOT evidence ? 'legacyUrl' AND (SELECT count(*) FROM jsonb_object_keys(evidence))<>2)
+      OR (NOT evidence ? 'legacyUrl' AND NOT evidence ?& ARRAY['parcelId','mlsNumber'])
+      OR (evidence ? 'legacyUrl' AND (jsonb_typeof(evidence->'legacyUrl') IS DISTINCT FROM 'string'
+        OR evidence->>'legacyUrl' !~ '^https://www\.zillow\.com/homes/[0-9][A-Za-z0-9-]{4,200}-[A-Z]{2}-[0-9]{5}_rb/$'))
+      OR EXISTS (SELECT 1 FROM jsonb_each(evidence) WHERE key IN ('parcelId','mlsNumber')
+        AND (jsonb_typeof(value) IS DISTINCT FROM 'string' OR value #>> '{}' !~ '^[A-Za-z0-9-]{1,40}$'))
       THEN RAISE EXCEPTION 'invalid identity' USING ERRCODE='22023'; END IF;
   END IF;
   SELECT array_agg(DISTINCT i.property_id) INTO ids FROM public.property_identifiers i
     WHERE (lower(i.kind) IN ('zpid','zillow_zpid','zillow') AND i.value=observation->>'zpid')
       OR (lower(i.kind) IN ('zillow_url','zillow','listing_url') AND i.value ~* ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$'));
   IF coalesce(cardinality(ids),0)>1 THEN RETURN NULL; END IF;
+  IF evidence ? 'legacyUrl' THEN
+    -- Only known source aliases, never canonical-address similarity. A missing
+    -- ZIP in a stored alias is allowed; a different published ZIP is not.
+    SELECT array_agg(DISTINCT property_id) INTO sources FROM public.property_identifiers
+      WHERE lower(kind) IN ('zillow_url','zillow','listing_url')
+      AND lower(value) IN (lower(evidence->>'legacyUrl'),lower(regexp_replace(evidence->>'legacyUrl','-[0-9]{5}_rb/$', '_rb/')));
+    IF coalesce(cardinality(sources),0)>1 THEN RETURN NULL; END IF;
+    IF coalesce(cardinality(ids),0)=0 AND coalesce(cardinality(sources),0)=1 THEN
+      ids:=sources; legacy:=true;
+    ELSIF coalesce(cardinality(sources),0)=1 AND ids[1]<>sources[1] THEN RETURN NULL; END IF;
+  END IF;
   IF evidence IS NOT NULL THEN
     SELECT array_agg(DISTINCT property_id) INTO parcels FROM (
       SELECT property_id FROM public.property_identifiers WHERE lower(kind) IN ('parcel','parcel_id') AND value=evidence->>'parcelId'
@@ -58,15 +71,19 @@ BEGIN
     (((lower(i.kind) IN ('zpid','zillow_zpid') OR (lower(i.kind)='zillow' AND i.value ~ '^[1-9][0-9]{0,19}$')) AND i.value<>observation->>'zpid') OR
      (lower(i.kind) IN ('zillow_url','zillow','listing_url') AND i.value ~* '^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?[1-9][0-9]*_zpid/?([?#].*)?$'
        AND i.value !~* ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$')) OR
-     (evidence IS NOT NULL AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId') OR
+     (evidence ? 'parcelId' AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId') OR
      -- MLS identifies a listing, so historical MLS aliases may differ. Require
      -- membership in the known set, rather than equality with every old listing.
-     (evidence IS NOT NULL AND lower(i.kind) IN ('mls','mls_number')
+     (evidence ? 'mlsNumber' AND lower(i.kind) IN ('mls','mls_number')
        AND NOT EXISTS (SELECT 1 FROM public.property_identifiers m WHERE m.property_id=tracked
          AND lower(m.kind) IN ('mls','mls_number') AND m.value=evidence->>'mlsNumber'))))
     THEN RETURN NULL; END IF;
-  IF evidence IS NOT NULL AND EXISTS (SELECT 1 FROM public.property_records p
+  IF evidence ? 'parcelId' AND EXISTS (SELECT 1 FROM public.property_records p
     WHERE p.id=tracked AND p.parcel_id IS NOT NULL AND p.parcel_id<>evidence->>'parcelId') THEN RETURN NULL; END IF;
+  IF evidence ? 'legacyUrl' AND EXISTS (SELECT 1 FROM public.property_identifiers i WHERE i.property_id=tracked
+    AND lower(i.kind) IN ('zillow_url','zillow','listing_url') AND i.value ~* '-[0-9]{5}_rb/$'
+    AND lower(regexp_replace(i.value,'-[0-9]{5}_rb/$', '_rb/','i'))=lower(regexp_replace(evidence->>'legacyUrl','-[0-9]{5}_rb/$', '_rb/'))
+    AND lower(i.value)<>lower(evidence->>'legacyUrl')) THEN RETURN NULL; END IF;
   -- Unique(kind,value) and the zpid transaction lock prevent competing bindings.
   IF legacy THEN
     INSERT INTO public.property_identifiers(property_id,kind,value,source)
@@ -166,6 +183,7 @@ CREATE TABLE IF NOT EXISTS public.browser_observation_field_history (
 CREATE OR REPLACE FUNCTION public.save_browser_observation(observation jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 DECLARE
+  evidence jsonb := observation->'identity';
   field_name text; val jsonb; captured timestamptz; effective timestamptz; capture uuid;
   tracked uuid; previous jsonb; after_value jsonb; prior_payload jsonb; old_price integer; old_status text;
   new_price integer; new_status text; changes text[] := ARRAY[]::text[]; prior text[];
@@ -173,13 +191,14 @@ DECLARE
 BEGIN
   IF octet_length(observation::text) > 256000 THEN RAISE EXCEPTION 'invalid observation' USING ERRCODE='22023'; END IF;
   IF observation ? 'identity' THEN
-    IF jsonb_typeof(observation->'identity') IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'invalid identity' USING ERRCODE='22023'; END IF;
-    IF (SELECT count(*) FROM jsonb_object_keys(observation->'identity'))<>2
-      OR NOT (observation->'identity') ?& ARRAY['parcelId','mlsNumber']
-      OR jsonb_typeof(observation->'identity'->'parcelId') IS DISTINCT FROM 'string'
-      OR jsonb_typeof(observation->'identity'->'mlsNumber') IS DISTINCT FROM 'string'
-      OR observation->'identity'->>'parcelId' !~ '^[A-Za-z0-9-]{1,40}$'
-      OR observation->'identity'->>'mlsNumber' !~ '^[A-Za-z0-9-]{1,40}$'
+    IF jsonb_typeof(evidence) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'invalid identity' USING ERRCODE='22023'; END IF;
+    IF EXISTS (SELECT 1 FROM jsonb_object_keys(evidence) k WHERE k NOT IN ('parcelId','mlsNumber','legacyUrl'))
+      OR (NOT evidence ? 'legacyUrl' AND (SELECT count(*) FROM jsonb_object_keys(evidence))<>2)
+      OR (NOT evidence ? 'legacyUrl' AND NOT evidence ?& ARRAY['parcelId','mlsNumber'])
+      OR (evidence ? 'legacyUrl' AND (jsonb_typeof(evidence->'legacyUrl') IS DISTINCT FROM 'string'
+        OR evidence->>'legacyUrl' !~ '^https://www\.zillow\.com/homes/[0-9][A-Za-z0-9-]{4,200}-[A-Z]{2}-[0-9]{5}_rb/$'))
+      OR EXISTS (SELECT 1 FROM jsonb_each(evidence) WHERE key IN ('parcelId','mlsNumber')
+        AND (jsonb_typeof(value) IS DISTINCT FROM 'string' OR value #>> '{}' !~ '^[A-Za-z0-9-]{1,40}$'))
       THEN RAISE EXCEPTION 'invalid identity' USING ERRCODE='22023'; END IF;
   END IF;
   IF NOT (observation ? 'field') THEN RETURN public.save_browser_observation_v1(observation); END IF;

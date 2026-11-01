@@ -25,5 +25,10 @@ describe('browser observations', () => {
     expect(parseObservation(valid,now)).not.toBeNull();
     for (const bad of [null,[],{}, {parcelId:'R295041'}, {...identity,extra:'no'}, {...identity,parcelId:'bad#'}, {...identity,mlsNumber:42}]) expect(parseObservation({...valid,identity:bad},now)).toBeNull();
   });
+  it('accepts only bounded exact legacy source evidence, optionally with independent IDs', () => {
+    const legacyUrl='https://www.zillow.com/homes/2124-NE-Davis-St-Portland-OR-97232_rb/';
+    for(const identity of [{legacyUrl},{legacyUrl,parcelId:'R148639'},{legacyUrl,mlsNumber:'144853010'},{legacyUrl,parcelId:'R148639',mlsNumber:'144853010'}]) expect(parseObservation({...valid,identity},now)).not.toBeNull();
+    for(const identity of [{legacyUrl:legacyUrl+'?x=1'},{legacyUrl:legacyUrl.replace('zillow.com','zillow.com.evil')},{legacyUrl:legacyUrl.replace('www.','user@www.')},{legacyUrl,extra:'no'},{legacyUrl,parcelId:42}]) expect(parseObservation({...valid,identity},now)).toBeNull();
+  });
   it('rejects normalized invalid calendar dates even within the age window', () => { const supplied='2026-02-30T12:00:00.000Z'; expect(parseObservation({...valid,observedAt:supplied}, Date.parse(supplied))).toBeNull(); });
 });

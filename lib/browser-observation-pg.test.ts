@@ -41,7 +41,7 @@ integration('real PostgreSQL observation transaction', () => {
     await admin.query(`DO $$ BEGIN CREATE ROLE browser_observation_writer LOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$`);
     await admin.query('DROP FUNCTION IF EXISTS public.save_browser_observation(jsonb)');
     await admin.query('DROP TABLE IF EXISTS public.browser_observation_history');
-    await admin.query(readFileSync(new URL('../scripts/browser-observation-schema.sql', import.meta.url),'utf8'));
+    await admin.query(readFileSync(process.env.BROWSER_OBSERVATION_BASELINE_SCHEMA || new URL('../scripts/browser-observation-schema.sql', import.meta.url),'utf8'));
 
     await admin.query('DROP TRIGGER IF EXISTS reject_test_event ON property_listing_events');
     await admin.query('DROP FUNCTION IF EXISTS reject_test_event()');
@@ -316,7 +316,7 @@ integration('real PostgreSQL observation transaction', () => {
     expect((await saveObservation(conflicting)).changedFields).toEqual([]);
     expect((await admin.query('SELECT latest_price,latest_status FROM property_current WHERE id=$1',[id])).rows[0]).toEqual({latest_price:700000,latest_status:'Pending'});
     expect((await admin.query('SELECT payload FROM browser_observation_field_history WHERE capture_id=$1',[conflicting.captureId])).rows[0].payload).toEqual(conflicting);
-    await admin.query(readFileSync(new URL('../scripts/browser-observation-schema.sql', import.meta.url),'utf8'));
+    await admin.query(readFileSync(process.env.BROWSER_OBSERVATION_BASELINE_SCHEMA || new URL('../scripts/browser-observation-schema.sql', import.meta.url),'utf8'));
     process.env.BROWSER_OBSERVATION_EXTENSION_ID='abcdefghijklmnopabcdefghijklmnop';
     process.env.BROWSER_OBSERVATION_TOKEN='test-token';
     const httpObserved=new Date().toISOString();
@@ -386,6 +386,88 @@ integration('real PostgreSQL observation transaction', () => {
       await admin.query('DELETE FROM browser_observation_field_history WHERE property_id=$1',[id]);
       await admin.query('DELETE FROM property_records WHERE id=$1',[id]);
     }
+  });
+  it.runIf(!!process.env.BROWSER_OBSERVATION_EXTENSION_REPO).each(['direct','anchors','conflict','unknown'])('keeps established identity authoritative with optional absent legacy alias through worker and SQL (%s)',async(scenario)=>{
+    const root=process.env.BROWSER_OBSERVATION_EXTENSION_REPO!,require=createRequire(import.meta.url);
+    const extractor=require(resolve(root,'extract.js')),builder=require(resolve(root,'capture-requests.js'));
+    const f=require(resolve(root,'test/legacy-fixture.cjs')).fixture('davis'),observation=extractor.collect(f.document,f.url,f.style);
+    const id=randomUUID(),other=randomUUID(),zpid=observation.zpid;
+    await admin.query('INSERT INTO property_records(id,canonical_address,normalized_address) VALUES($1::uuid,($1::uuid)::text,($1::uuid)::text),($2::uuid,($2::uuid)::text,($2::uuid)::text)',[id,other]);
+    if(scenario==='direct'||scenario==='conflict') await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zillow_url',$2)",[id,observation.url]);
+    if(scenario==='anchors') {await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'parcel','R-ABSENT'),($1,'mls','M-ABSENT')",[id]);observation.fields={parcel_id:'R-ABSENT',mls_number:'M-ABSENT'};}
+    if(scenario==='conflict') await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zillow_url',$2)",[other,observation.legacyUrl]);
+    process.env.BROWSER_OBSERVATION_EXTENSION_ID='abcdefghijklmnopabcdefghijklmnop';process.env.BROWSER_OBSERVATION_TOKEN='test-token';
+    const http=createHttpServer(async(req,res)=>{const chunks=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));const response=await POST(new Request('https://dashboard.test/api/browser-observations',{method:'POST',headers:req.headers as Record<string,string>,body:Buffer.concat(chunks)}));res.writeHead(response.status,{'content-type':'application/json'});res.end(await response.text())});
+    await new Promise<void>(r=>http.listen(0,'127.0.0.1',r));const port=(http.address() as {port:number}).port;
+    let listener:(m:unknown,s:unknown,r:(v:any)=>void)=>void;
+    const chrome={runtime:{id:'extension',onMessage:{addListener:(f:typeof listener)=>listener=f}},storage:{local:{setAccessLevel:async()=>{},get:async()=>({origin:'https://dashboard.test',token:'test-token'})}},tabs:{get:async()=>({url:f.url})},permissions:{contains:async()=>true}};
+    runInNewContext(readFileSync(resolve(root,'worker.js'),'utf8'),{chrome,URL,AbortSignal,TextEncoder,importScripts:()=>{},ZillowExtract:extractor,fetch:async(_url:string,init:RequestInit)=>fetch(`http://127.0.0.1:${port}/api/browser-observations`,{...init,headers:{...init.headers,Origin:'chrome-extension://abcdefghijklmnopabcdefghijklmnop'}})});
+    try{
+      const captures=builder.build(observation,randomUUID);expect(captures[0].identity.legacyUrl).toBe(observation.legacyUrl);
+      const result=await new Promise<any>(r=>listener({type:'observe',observation:{...observation,captures}},{id:'extension',frameId:0,tab:{id:1,url:f.url},url:f.url},r));
+      if(scenario==='direct'||scenario==='anchors') {expect(result.ok).toBe(true);expect((await admin.query('SELECT latest_status FROM property_current WHERE id=$1',[id])).rows[0].latest_status).toBe('Off market');}
+      else {expect(result).toMatchObject({ok:false,reason:'not-tracked'});expect((await admin.query('SELECT count(*)::int n FROM browser_observation_field_history WHERE property_id=ANY($1::uuid[])',[[id,other]])).rows[0].n).toBe(0);}
+    }finally{await new Promise<void>(r=>http.close(()=>r()));await admin.query('DELETE FROM browser_observation_field_history WHERE property_id=ANY($1::uuid[])',[[id,other]]);await admin.query('DELETE FROM property_records WHERE id=ANY($1::uuid[])',[[id,other]])}
+  });
+  it.runIf(!!process.env.BROWSER_OBSERVATION_EXTENSION_REPO).each(['davis','alberta','prescott','showcase'])('collects %s through actual builder, worker, HTTP handler and restricted SQL without manual binding',async(name)=>{
+    const root=process.env.BROWSER_OBSERVATION_EXTENSION_REPO!,require=createRequire(import.meta.url);
+    const extractor=require(resolve(root,'extract.js')),builder=require(resolve(root,'capture-requests.js'));
+    const cases=require(resolve(root,'test/legacy-fixture.cjs')).cases;
+    const f=name==='showcase'?require(resolve(root,'test/showcase-fixture.cjs'))():require(resolve(root,'test/legacy-fixture.cjs')).fixture(name);
+    const observation=process.env.BROWSER_OBSERVATION_CAPTURE_DIR ? JSON.parse(readFileSync(resolve(process.env.BROWSER_OBSERVATION_CAPTURE_DIR,`nest-${name==='showcase'?'terwilliger':name}-collected.json`),'utf8')).o : extractor.collect(f.document,f.url,f.style);expect(observation).not.toBeNull();
+    const id=randomUUID(),other=randomUUID(),zpid=observation.zpid;
+    const source=name==='showcase'?'https://www.zillow.com/homes/9314-SW-Terwilliger-Blvd-Portland-OR-97219_rb/':cases[name].legacy;
+    const canonical=name==='showcase'?'9314 SW TERWILLIGER BLVD':cases[name].street.toUpperCase();
+    await admin.query('INSERT INTO property_records(id,canonical_address,normalized_address) VALUES($1,$2,$2),($3::uuid,($3::uuid)::text,($3::uuid)::text)',[id,canonical,other]);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zillow_url',$2)",[id,source]);
+    await admin.query("INSERT INTO property_collections(property_id,collection,track) VALUES($1,'watchlist','house')",[id]);
+    await admin.query("INSERT INTO property_funnel_ranks(property_id,rank_key) VALUES($1,'zzzzz')",[id]);
+    const saved=await admin.query('SELECT row_to_json(t) r FROM property_collections t WHERE property_id=$1',[id]);
+    if(observation.fields?.mls_number) await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'mls',$2)",[id,observation.fields.mls_number]);
+    const payload=builder.build(observation,randomUUID)[0],unmatched={matched:false,changedFields:[]};
+    // Neither canonical suffixes nor zip-less aliases are repaired by fixtures.
+    // The baseline writer fails this first positive assertion.
+    expect((await saveObservation(payload)).matched).toBe(true);
+    // Remove the automatically learned zpid to repeat cold-start ambiguity tests.
+    await admin.query("DELETE FROM property_identifiers WHERE property_id=$1 AND kind='zpid'",[id]);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'listing_url',$2)",[other,source]);
+    expect(await saveObservation({...payload,captureId:randomUUID()})).toEqual(unmatched);
+    await admin.query('DELETE FROM property_identifiers WHERE property_id=$1',[other]);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zpid',$2)",[other,zpid]);
+    expect(await saveObservation({...payload,captureId:randomUUID()})).toEqual(unmatched);
+    await admin.query('DELETE FROM property_identifiers WHERE property_id=$1',[other]);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'parcel','OTHER'),($1,'mls','OTHER')",[other]);
+    for(const identity of [{...payload.identity,parcelId:'OTHER'},{...payload.identity,mlsNumber:'OTHER'}, {...payload.identity,legacyUrl:payload.identity.legacyUrl.replace('-OR-','-WA-')}, {...payload.identity,legacyUrl:payload.identity.legacyUrl.replace('97217','99999').replace('97232','99999').replace('97219','99999')}]){
+      // A zip-less stored URL explicitly lacks ZIP evidence; only a different
+      // known ZIP is a conflict. State/street and cross-record IDs always reject.
+      if(identity.legacyUrl.includes('99999') && !/-\d{5}_rb/.test(source)) continue;
+      expect(await saveObservation({...payload,captureId:randomUUID(),identity})).toEqual(unmatched);
+    }
+    if(name==='davis'){
+      await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'listing_url','https://www.zillow.com/homes/2124-NE-Davis-St-Portland-OR-99999_rb/')",[id]);
+      expect(await saveObservation({...payload,captureId:randomUUID()})).toEqual(unmatched);
+      await admin.query("DELETE FROM property_identifiers WHERE property_id=$1 AND kind='listing_url'",[id]);
+      await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zillow_url','https://www.zillow.com/homedetails/999_zpid/')",[id]);
+      expect(await saveObservation({...payload,captureId:randomUUID()})).toEqual(unmatched);
+      await admin.query("DELETE FROM property_identifiers WHERE property_id=$1 AND value LIKE '%999_zpid/'",[id]);
+    }
+    process.env.BROWSER_OBSERVATION_EXTENSION_ID='abcdefghijklmnopabcdefghijklmnop';process.env.BROWSER_OBSERVATION_TOKEN='test-token';
+    const http=createHttpServer(async(req,res)=>{const chunks=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));const response=await POST(new Request('https://dashboard.test/api/browser-observations',{method:'POST',headers:req.headers as Record<string,string>,body:Buffer.concat(chunks)}));res.writeHead(response.status,{'content-type':'application/json'});res.end(await response.text())});
+    await new Promise<void>(r=>http.listen(0,'127.0.0.1',r));const port=(http.address() as {port:number}).port;
+    let listener:(m:unknown,s:unknown,r:(v:any)=>void)=>void;
+    const chrome={runtime:{id:'extension',onMessage:{addListener:(f:typeof listener)=>listener=f}},storage:{local:{setAccessLevel:async()=>{},get:async()=>({origin:'https://dashboard.test',token:'test-token'})}},tabs:{get:async()=>({url:f.url})},permissions:{contains:async()=>true}};
+    runInNewContext(readFileSync(resolve(root,'worker.js'),'utf8'),{chrome,URL,AbortSignal,TextEncoder,importScripts:()=>{},ZillowExtract:extractor,fetch:async(_url:string,init:RequestInit)=>fetch(`http://127.0.0.1:${port}/api/browser-observations`,{...init,headers:{...init.headers,Origin:'chrome-extension://abcdefghijklmnopabcdefghijklmnop'}})});
+    try{
+      const captures=builder.build(observation,randomUUID),sender={id:'extension',frameId:0,tab:{id:1,url:f.url},url:f.url};
+      const send=(o=observation,cs=captures)=>new Promise<any>(r=>listener({type:'observe',observation:{...o,captures:cs}},sender,r));
+      expect((await send()).ok).toBe(true);expect((await send()).ok).toBe(true);
+      expect((await saveObservation({...payload,captureId:randomUUID(),identity:{legacyUrl:payload.identity.legacyUrl.replace('-OR-','-WA-')}})).matched).toBe(true); // known zpid remains authoritative when no alternate alias matches
+      expect((await send({...observation,legacyUrl:'https://www.zillow.com/homes/999-Other-St-Portland-OR-97217_rb/'})).ok).toBe(false);
+      expect((await admin.query('SELECT latest_status,latest_price FROM property_current WHERE id=$1',[id])).rows[0]).toMatchObject({latest_status:observation.status,...(name==='showcase'?{latest_price:450000}:{})});
+      expect((await admin.query('SELECT row_to_json(t) r FROM property_collections t WHERE property_id=$1',[id])).rows).toEqual(saved.rows);
+      expect((await admin.query('SELECT rank_key FROM property_funnel_ranks WHERE property_id=$1',[id])).rows[0].rank_key).toBe('zzzzz');
+      expect((await admin.query("SELECT value FROM property_identifiers WHERE property_id=$1 AND kind='zpid'",[id])).rows[0].value).toBe(zpid);
+    }finally{await new Promise<void>(r=>http.close(()=>r()));await admin.query('DELETE FROM browser_observation_field_history WHERE property_id=ANY($1::uuid[])',[[id,other]]);await admin.query('DELETE FROM property_records WHERE id=ANY($1::uuid[])',[[id,other]])}
   });
   it.runIf(!!process.env.BROWSER_OBSERVATION_EXTENSION_REPO).each([true,false])('collects literal Sold label through worker and API without an asking price (dated history=%s)',async(history)=>{
     const root=process.env.BROWSER_OBSERVATION_EXTENSION_REPO!, require=createRequire(import.meta.url);

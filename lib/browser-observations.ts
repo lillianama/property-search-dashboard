@@ -1,6 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 
-export type IdentityEvidence = { parcelId: string; mlsNumber: string };
+export type IdentityEvidence = { parcelId: string; mlsNumber: string; legacyUrl?: string } | { legacyUrl: string; parcelId?: string; mlsNumber?: string };
 export type LegacyObservation = { identity?: IdentityEvidence; zpid: string; url: string; captureId: string; observedAt: string; price?: number; status?: 'Active' | 'Pending' };
 export type FieldObservation = { identity?: IdentityEvidence; zpid: string; url: string; captureId: string; observedAt: string; field: string; value: unknown };
 export type Observation = LegacyObservation | FieldObservation;
@@ -58,7 +58,12 @@ export function parseObservation(value: unknown, now = Date.now()): Observation 
   if (Object.keys(o).some(k => !(v2 ? ['zpid','url','captureId','observedAt','field','value','identity'] : ['zpid','url','captureId','observedAt','price','status','identity']).includes(k)) || Object.keys(o).length !== (Object.hasOwn(o, 'identity') ? 7 : 6)) return null;
   if (Object.hasOwn(o, 'identity')) {
     const e = o.identity as Record<string, unknown> | null;
-    if (!e || typeof e !== 'object' || Array.isArray(e) || Object.keys(e).length !== 2 || !['parcelId','mlsNumber'].every(k => typeof e[k] === 'string' && /^[A-Za-z0-9-]{1,40}$/.test(e[k] as string))) return null;
+    if (!e || typeof e !== 'object' || Array.isArray(e) || Object.keys(e).some(k=>!['parcelId','mlsNumber','legacyUrl'].includes(k))) return null;
+    if (e.legacyUrl === undefined) {
+      if (Object.keys(e).length !== 2) return null;
+    } else if (typeof e.legacyUrl !== 'string' || !/^https:\/\/www\.zillow\.com\/homes\/[0-9][A-Za-z0-9-]{4,200}-[A-Z]{2}-[0-9]{5}_rb\/$/.test(e.legacyUrl)) return null;
+    if (!['parcelId','mlsNumber'].every(k => (e.legacyUrl !== undefined && e[k] === undefined)
+      || (typeof e[k] === 'string' && /^[A-Za-z0-9-]{1,40}$/.test(e[k] as string)))) return null;
   }
   if (typeof o.zpid !== 'string' || !/^[1-9]\d{0,19}$/.test(o.zpid) || typeof o.url !== 'string' || o.url !== `https://www.zillow.com/homedetails/${o.zpid}_zpid/`) return null;
   if (typeof o.captureId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(o.captureId)) return null;
