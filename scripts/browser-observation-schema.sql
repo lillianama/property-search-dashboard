@@ -15,6 +15,59 @@ CREATE TABLE IF NOT EXISTS public.browser_observation_history (
   UNIQUE (zpid, capture_id)
 );
 
+-- Resolve exact identifiers only. No address guesses, intake, or record merges.
+-- Both independent legacy anchors are required before persisting a missing zpid.
+CREATE OR REPLACE FUNCTION public.resolve_browser_observation_identity(observation jsonb)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE
+  evidence jsonb := observation->'identity';
+  ids uuid[]; parcels uuid[]; listings uuid[]; tracked uuid; legacy boolean := false;
+BEGIN
+  IF observation ? 'identity' THEN
+    IF jsonb_typeof(evidence) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'invalid identity' USING ERRCODE='22023'; END IF;
+    IF (SELECT count(*) FROM jsonb_object_keys(evidence))<>2
+      OR NOT evidence ?& ARRAY['parcelId','mlsNumber']
+      OR jsonb_typeof(evidence->'parcelId') IS DISTINCT FROM 'string'
+      OR jsonb_typeof(evidence->'mlsNumber') IS DISTINCT FROM 'string'
+      OR evidence->>'parcelId' !~ '^[A-Za-z0-9-]{1,40}$'
+      OR evidence->>'mlsNumber' !~ '^[A-Za-z0-9-]{1,40}$'
+      THEN RAISE EXCEPTION 'invalid identity' USING ERRCODE='22023'; END IF;
+  END IF;
+  SELECT array_agg(DISTINCT i.property_id) INTO ids FROM public.property_identifiers i
+    WHERE (i.kind IN ('zpid','zillow_zpid') AND i.value=observation->>'zpid')
+      OR (i.kind='zillow_url' AND i.value ~ ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$'));
+  IF coalesce(cardinality(ids),0)>1 THEN RETURN NULL; END IF;
+  IF evidence IS NOT NULL THEN
+    SELECT array_agg(DISTINCT property_id) INTO parcels FROM public.property_identifiers WHERE kind IN ('parcel','parcel_id') AND value=evidence->>'parcelId';
+    SELECT array_agg(DISTINCT property_id) INTO listings FROM public.property_identifiers WHERE kind IN ('mls','mls_number') AND value=evidence->>'mlsNumber';
+    IF coalesce(cardinality(ids),0)=0 THEN
+      IF coalesce(cardinality(parcels),0)<>1 OR coalesce(cardinality(listings),0)<>1 OR parcels[1]<>listings[1] THEN RETURN NULL; END IF;
+      ids:=parcels; legacy:=true;
+    END IF;
+    IF EXISTS (SELECT 1 FROM unnest(parcels || listings) p WHERE p<>ids[1]) THEN RETURN NULL; END IF;
+  END IF;
+  IF coalesce(cardinality(ids),0)<>1 THEN RETURN NULL; END IF;
+  tracked:=ids[1];
+  PERFORM pg_advisory_xact_lock(hashtextextended('property:' || tracked::text,0));
+  PERFORM 1 FROM public.property_records WHERE id=tracked FOR UPDATE;
+  -- Reject contradictory identifiers even when another alias selected the row.
+  IF EXISTS (SELECT 1 FROM public.property_identifiers i WHERE i.property_id=tracked AND
+    ((i.kind IN ('zpid','zillow_zpid') AND i.value<>observation->>'zpid') OR
+     (i.kind='zillow_url' AND i.value ~ '^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?[1-9][0-9]*_zpid/?([?#].*)?$'
+       AND i.value !~ ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$')) OR
+     (evidence IS NOT NULL AND i.kind IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId') OR
+     (evidence IS NOT NULL AND i.kind IN ('mls','mls_number') AND i.value<>evidence->>'mlsNumber')))
+    THEN RETURN NULL; END IF;
+  -- Unique(kind,value) and the zpid transaction lock prevent competing bindings.
+  IF legacy THEN
+    INSERT INTO public.property_identifiers(property_id,kind,value,source)
+      VALUES(tracked,'zpid',observation->>'zpid','zillow-browser-exact-identity') ON CONFLICT(kind,value) DO NOTHING;
+    IF NOT EXISTS (SELECT 1 FROM public.property_identifiers WHERE kind='zpid' AND value=observation->>'zpid' AND property_id=tracked) THEN RETURN NULL; END IF;
+  END IF;
+  RETURN tracked;
+END; $$;
+REVOKE ALL ON FUNCTION public.resolve_browser_observation_identity(jsonb) FROM PUBLIC;
+
 CREATE OR REPLACE FUNCTION public.save_browser_observation_v1(observation jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER
@@ -22,7 +75,6 @@ SET search_path = pg_catalog
 AS $$
 DECLARE
   tracked_id uuid;
-  identities uuid[];
   capture uuid;
   captured_at timestamptz;
   effective_at timestamptz;
@@ -34,7 +86,7 @@ BEGIN
   IF jsonb_typeof(observation) IS DISTINCT FROM 'object' THEN
     RAISE EXCEPTION 'invalid observation' USING ERRCODE = '22023';
   END IF;
-  IF (SELECT count(*) FROM jsonb_object_keys(observation)) <> 6
+  IF (SELECT count(*) FROM jsonb_object_keys(observation)) <> (CASE WHEN observation ? 'identity' THEN 7 ELSE 6 END)
     OR NOT observation ?& ARRAY['zpid','url','captureId','observedAt','price','status']
     OR jsonb_typeof(observation->'zpid') IS DISTINCT FROM 'string'
     OR (observation->>'zpid') !~ '^[1-9][0-9]{0,19}$'
@@ -51,6 +103,7 @@ BEGIN
     OR (observation->>'status') NOT IN ('Active','Pending') THEN
     RAISE EXCEPTION 'invalid observation' USING ERRCODE = '22023';
   END IF;
+  IF EXISTS (SELECT 1 FROM jsonb_object_keys(observation) k WHERE k NOT IN ('zpid','url','captureId','observedAt','price','status','identity')) THEN RAISE EXCEPTION 'invalid observation' USING ERRCODE='22023'; END IF;
   capture := (observation->>'captureId')::uuid;
   captured_at := (observation->>'observedAt')::timestamptz;
   IF NOT isfinite(captured_at) OR captured_at < statement_timestamp() - interval '24 hours'
@@ -65,15 +118,8 @@ BEGIN
   IF FOUND THEN
     RETURN jsonb_build_object('matched',true,'zpid',observation->>'zpid','changedFields',prior_result);
   END IF;
-  SELECT array_agg(DISTINCT i.property_id) INTO identities
-    FROM public.property_identifiers i
-    WHERE (i.kind IN ('zpid','zillow_zpid') AND i.value = observation->>'zpid')
-      OR (i.kind = 'zillow_url' AND i.value ~
-        ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$'));
-  IF coalesce(cardinality(identities),0) <> 1 THEN
-    RETURN jsonb_build_object('matched',false,'changedFields',ARRAY[]::text[]);
-  END IF;
-  tracked_id := identities[1];
+  tracked_id := public.resolve_browser_observation_identity(observation);
+  IF tracked_id IS NULL THEN RETURN jsonb_build_object('matched',false,'changedFields',ARRAY[]::text[]); END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('property:' || tracked_id::text, 0));
   -- Serialize against ordinary foreign-key-backed event inserts as well.
   PERFORM 1 FROM public.property_records p WHERE p.id = tracked_id FOR UPDATE;
@@ -112,20 +158,31 @@ CREATE OR REPLACE FUNCTION public.save_browser_observation(observation jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 DECLARE
   field_name text; val jsonb; captured timestamptz; effective timestamptz; capture uuid;
-  ids uuid[]; tracked uuid; previous jsonb; after_value jsonb; prior_payload jsonb; old_price integer; old_status text;
+  tracked uuid; previous jsonb; after_value jsonb; prior_payload jsonb; old_price integer; old_status text;
   new_price integer; new_status text; changes text[] := ARRAY[]::text[]; prior text[];
   added_id bigint; tax_year integer; v_event_date date; min_value numeric; max_value numeric; integral boolean := false; item jsonb;
 BEGIN
   IF octet_length(observation::text) > 256000 THEN RAISE EXCEPTION 'invalid observation' USING ERRCODE='22023'; END IF;
+  IF observation ? 'identity' THEN
+    IF jsonb_typeof(observation->'identity') IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'invalid identity' USING ERRCODE='22023'; END IF;
+    IF (SELECT count(*) FROM jsonb_object_keys(observation->'identity'))<>2
+      OR NOT (observation->'identity') ?& ARRAY['parcelId','mlsNumber']
+      OR jsonb_typeof(observation->'identity'->'parcelId') IS DISTINCT FROM 'string'
+      OR jsonb_typeof(observation->'identity'->'mlsNumber') IS DISTINCT FROM 'string'
+      OR observation->'identity'->>'parcelId' !~ '^[A-Za-z0-9-]{1,40}$'
+      OR observation->'identity'->>'mlsNumber' !~ '^[A-Za-z0-9-]{1,40}$'
+      THEN RAISE EXCEPTION 'invalid identity' USING ERRCODE='22023'; END IF;
+  END IF;
   IF NOT (observation ? 'field') THEN RETURN public.save_browser_observation_v1(observation); END IF;
   IF jsonb_typeof(observation) IS DISTINCT FROM 'object' OR octet_length(observation::text) > 256000
-    OR (SELECT count(*) FROM jsonb_object_keys(observation)) <> 6
+    OR (SELECT count(*) FROM jsonb_object_keys(observation)) <> (CASE WHEN observation ? 'identity' THEN 7 ELSE 6 END)
     OR NOT observation ?& ARRAY['zpid','url','captureId','observedAt','field','value']
     OR jsonb_typeof(observation->'zpid') IS DISTINCT FROM 'string' OR observation->>'zpid' !~ '^[1-9][0-9]{0,19}$'
     OR jsonb_typeof(observation->'url') IS DISTINCT FROM 'string' OR observation->>'url' <> 'https://www.zillow.com/homedetails/' || (observation->>'zpid') || '_zpid/'
     OR jsonb_typeof(observation->'captureId') IS DISTINCT FROM 'string' OR observation->>'captureId' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
     OR jsonb_typeof(observation->'observedAt') IS DISTINCT FROM 'string' OR observation->>'observedAt' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$'
     OR jsonb_typeof(observation->'field') IS DISTINCT FROM 'string' THEN RAISE EXCEPTION 'invalid observation' USING ERRCODE='22023'; END IF;
+  IF EXISTS (SELECT 1 FROM jsonb_object_keys(observation) k WHERE k NOT IN ('zpid','url','captureId','observedAt','field','value','identity')) THEN RAISE EXCEPTION 'invalid observation' USING ERRCODE='22023'; END IF;
   field_name := observation->>'field'; val := observation->'value';
   CASE field_name
     WHEN 'bedrooms' THEN min_value:=0; max_value:=100;
@@ -214,9 +271,8 @@ BEGIN
   IF FOUND THEN
     IF prior_payload IS DISTINCT FROM observation THEN RAISE EXCEPTION 'capture conflict' USING ERRCODE='22023'; END IF;
     RETURN jsonb_build_object('matched',true,'zpid',observation->>'zpid','changedFields',prior); END IF;
-  SELECT array_agg(DISTINCT i.property_id) INTO ids FROM public.property_identifiers i WHERE (i.kind IN ('zpid','zillow_zpid') AND i.value=observation->>'zpid') OR (i.kind='zillow_url' AND i.value ~ ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$'));
-  IF coalesce(cardinality(ids),0)<>1 THEN RETURN jsonb_build_object('matched',false,'changedFields',ARRAY[]::text[]); END IF;
-  tracked:=ids[1]; PERFORM pg_advisory_xact_lock(hashtextextended('property:' || tracked::text,0));
+  tracked := public.resolve_browser_observation_identity(observation);
+  IF tracked IS NULL THEN RETURN jsonb_build_object('matched',false,'changedFields',ARRAY[]::text[]); END IF;
   PERFORM 1 FROM public.property_records p WHERE p.id=tracked FOR UPDATE;
   IF field_name='listing_history' THEN
     IF NOT EXISTS (SELECT 1 FROM public.property_listing_events e WHERE e.property_id=tracked AND e.source='zillow-browser' AND e.event_date=v_event_date AND e.raw=val) THEN

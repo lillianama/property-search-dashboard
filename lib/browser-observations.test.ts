@@ -19,5 +19,11 @@ describe('browser observations', () => {
     expect(parseObservation({...v2,field:'heating',value:Array(30).fill('x'.repeat(200))},now)).not.toBeNull();
     expect(parseObservation({...v2,field:'heating',value:Array(31).fill('x')},now)).toBeNull();
   });
+  it('accepts bounded exact evidence while keeping legacy payloads valid', () => {
+    const identity={parcelId:'R295041',mlsNumber:'262014608'};
+    expect(parseObservation({...valid,identity},now)).not.toBeNull();
+    expect(parseObservation(valid,now)).not.toBeNull();
+    for (const bad of [null,[],{}, {parcelId:'R295041'}, {...identity,extra:'no'}, {...identity,parcelId:'bad#'}, {...identity,mlsNumber:42}]) expect(parseObservation({...valid,identity:bad},now)).toBeNull();
+  });
   it('rejects normalized invalid calendar dates even within the age window', () => { const supplied='2026-02-30T12:00:00.000Z'; expect(parseObservation({...valid,observedAt:supplied}, Date.parse(supplied))).toBeNull(); });
 });

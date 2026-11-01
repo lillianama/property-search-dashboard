@@ -1,7 +1,8 @@
 import { timingSafeEqual } from 'node:crypto';
 
-export type LegacyObservation = { zpid: string; url: string; captureId: string; observedAt: string; price?: number; status?: 'Active' | 'Pending' };
-export type FieldObservation = { zpid: string; url: string; captureId: string; observedAt: string; field: string; value: unknown };
+export type IdentityEvidence = { parcelId: string; mlsNumber: string };
+export type LegacyObservation = { identity?: IdentityEvidence; zpid: string; url: string; captureId: string; observedAt: string; price?: number; status?: 'Active' | 'Pending' };
+export type FieldObservation = { identity?: IdentityEvidence; zpid: string; url: string; captureId: string; observedAt: string; field: string; value: unknown };
 export type Observation = LegacyObservation | FieldObservation;
 const numeric: Record<string, [number, number, boolean]> = {
   bedrooms:[0,100,false], bathrooms:[0,100,false], finished_sqft:[1,10000000,true], structure_sqft:[1,10000000,true], year_built:[1600,2100,true], lot_sqft:[1,1000000000,false], latitude:[-90,90,false], longitude:[-180,180,false], annual_property_tax:[0.01,1000000000,false], annual_property_tax_year:[1900,2100,true], zestimate:[1,1000000000,true], rent_zestimate:[1,10000000,true], monthly_hoa_fee:[0,10000000,false], stories:[0.5,200,false], unit_count:[1,10000,true], days_on_market:[0,100000,true], published_assessed_value:[1,1000000000,false], published_annual_tax_amount:[0.01,1000000000,false],
@@ -54,7 +55,11 @@ export function parseObservation(value: unknown, now = Date.now()): Observation 
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const o = value as Record<string, unknown>;
   const v2 = Object.hasOwn(o, 'field');
-  if (Object.keys(o).some(k => !(v2 ? ['zpid','url','captureId','observedAt','field','value'] : ['zpid','url','captureId','observedAt','price','status']).includes(k)) || Object.keys(o).length !== 6) return null;
+  if (Object.keys(o).some(k => !(v2 ? ['zpid','url','captureId','observedAt','field','value','identity'] : ['zpid','url','captureId','observedAt','price','status','identity']).includes(k)) || Object.keys(o).length !== (Object.hasOwn(o, 'identity') ? 7 : 6)) return null;
+  if (Object.hasOwn(o, 'identity')) {
+    const e = o.identity as Record<string, unknown> | null;
+    if (!e || typeof e !== 'object' || Array.isArray(e) || Object.keys(e).length !== 2 || !['parcelId','mlsNumber'].every(k => typeof e[k] === 'string' && /^[A-Za-z0-9-]{1,40}$/.test(e[k] as string))) return null;
+  }
   if (typeof o.zpid !== 'string' || !/^[1-9]\d{0,19}$/.test(o.zpid) || typeof o.url !== 'string' || o.url !== `https://www.zillow.com/homedetails/${o.zpid}_zpid/`) return null;
   if (typeof o.captureId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(o.captureId)) return null;
   if (typeof o.observedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(o.observedAt)) return null;

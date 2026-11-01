@@ -12,6 +12,9 @@ import { POST } from '../app/api/browser-observations/route';
 import { GET as dashboardGET } from '../app/api/dashboard/route';
 import { NextRequest } from 'next/server';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { runInNewContext } from 'node:vm';
+import { resolve } from 'node:path';
 
 // Explicit opt-in: this bridge targets only the dedicated disposable test container.
 const integration = process.env.BROWSER_OBSERVATION_PG_TEST === '1' ? describe : describe.skip;
@@ -52,6 +55,45 @@ integration('real PostgreSQL observation transaction', () => {
     await admin.query(`INSERT INTO property_editor_notes(property_id,field,value) VALUES ($1,'remarks','keep')`,[property]);
   });
   afterAll(async()=>{ await closeBrowserObservationPool(); await admin?.end(); for (const socket of sockets) socket.destroy(); server?.close(); });
+  it('binds legacy records only with two agreeing exact anchors and rejects conflicts without writes', async()=>{
+    const id=randomUUID(), other=randomUUID();
+    await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address) VALUES ($1,'legacy exact','legacy exact'),($2,'other exact','other exact')",[id,other]);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES ($1,'parcel','R295041'),($1,'mls','262014608'),($1,'zillow_url','https://www.zillow.com/homes/5218-NE-18TH-AVE-Portland-OR_rb/'),($2,'parcel','R999'),($2,'mls','999')",[id,other]);
+    const payload={zpid:'53976377',url:'https://www.zillow.com/homedetails/53976377_zpid/',captureId:randomUUID(),observedAt:new Date().toISOString(),field:'bedrooms',value:2};
+    const identity={parcelId:'R295041',mlsNumber:'262014608'};
+    const unmatched={matched:false,changedFields:[]};
+    expect(await saveObservation(payload)).toEqual(unmatched);
+    for (const e of [{...identity,mlsNumber:'999'},{...identity,parcelId:'R999'},{...identity,mlsNumber:'unknown'},{parcelId:'absent',mlsNumber:'absent'}]) expect(await saveObservation({...payload,captureId:randomUUID(),identity:e})).toEqual(unmatched);
+    // Alias ambiguity and a pre-existing contradictory zpid must never bind.
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES ($1,'mls_number','262014608')",[other]);
+    expect(await saveObservation({...payload,identity})).toEqual(unmatched);
+    await admin.query("DELETE FROM property_identifiers WHERE kind='mls_number' AND value='262014608'");
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES ($1,'zillow_zpid','42')",[id]);
+    expect(await saveObservation({...payload,identity})).toEqual(unmatched);
+    await admin.query("DELETE FROM property_identifiers WHERE kind='zillow_zpid' AND value='42'");
+    const saved=await saveObservation({...payload,identity});
+    expect(saved).toEqual({matched:true,zpid:payload.zpid,changedFields:['bedrooms']});
+    expect(await saveObservation({...payload,identity})).toEqual(saved);
+    expect((await admin.query("SELECT property_id FROM property_identifiers WHERE kind='zpid' AND value='53976377'")).rows).toEqual([{property_id:id}]);
+    expect((await saveObservation({...payload,captureId:randomUUID()})).matched).toBe(true);
+    expect(await saveObservation({...payload,captureId:randomUUID(),identity:{...identity,parcelId:'R999'}})).toEqual(unmatched);
+    const conflict={...payload,zpid:'777777',url:'https://www.zillow.com/homedetails/777777_zpid/',captureId:randomUUID(),identity};
+    expect(await saveObservation(conflict)).toEqual(unmatched);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES ($1,'zillow_zpid','53976377')",[other]);
+    expect(await saveObservation({...payload,captureId:randomUUID()})).toEqual(unmatched);
+    await admin.query("DELETE FROM property_identifiers WHERE kind='zillow_zpid' AND value='53976377'");
+    // v1 uses the same resolver, including legacy alias kinds.
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES ($1,'parcel_id','R2'),($1,'mls_number','M2')",[other]);
+    expect((await saveObservation({...base,zpid:'888888',url:'https://www.zillow.com/homedetails/888888_zpid/',captureId:randomUUID(),identity:{parcelId:'R2',mlsNumber:'M2'}})).matched).toBe(false); // contradictory existing parcel/MLS
+    await admin.query("DELETE FROM property_identifiers WHERE property_id=$1 AND kind IN ('parcel','mls')",[other]);
+    expect((await saveObservation({...base,zpid:'888888',url:'https://www.zillow.com/homedetails/888888_zpid/',captureId:randomUUID(),identity:{parcelId:'R2',mlsNumber:'M2'}})).matched).toBe(true);
+    for (const identity of [null,{}, {parcelId:'R2'}, {parcelId:'R2',mlsNumber:'M2',extra:'x'}]) await expect(saveObservation({...payload,captureId:randomUUID(),identity} as unknown as Observation)).rejects.toThrow('invalid identity');
+    expect(Number((await admin.query('SELECT count(*) n FROM property_records')).rows[0].n)).toBe(3);
+    expect((await admin.query("SELECT count(*)::int n FROM browser_observation_field_history WHERE zpid='777777'")).rows[0].n).toBe(0);
+    await admin.query('DELETE FROM browser_observation_field_history WHERE property_id=ANY($1::uuid[])',[[id,other]]);
+    await admin.query('DELETE FROM browser_observation_history WHERE property_id=ANY($1::uuid[])',[[id,other]]);
+    await admin.query('DELETE FROM property_records WHERE id=ANY($1::uuid[])',[[id,other]]);
+  });
   it('projects current facts; retries, concurrent writes, stale evidence and rollback preserve invariants',async()=>{
     const a = await saveObservation(base);
     expect(a).toEqual({matched:true,zpid:'123',changedFields:['price','status']});
@@ -234,6 +276,7 @@ integration('real PostgreSQL observation transaction', () => {
     expect(Number((await admin.query('SELECT count(*) AS n FROM property_records')).rows[0].n)).toBe(4);
     const restricted=new Pool({connectionString:process.env.BROWSER_OBSERVATION_DATABASE_URL});
     await expect(restricted.query(`UPDATE property_editor_notes SET value='changed'`)).rejects.toThrow();
+    await expect(restricted.query('SELECT public.resolve_browser_observation_identity($1::jsonb)',[JSON.stringify(base)])).rejects.toThrow(/permission denied/);
     await expect(restricted.query(`INSERT INTO property_listing_events(property_id,event_type,price,status,source) VALUES ($1,'listing',1,'Active','forged')`,[property])).rejects.toThrow(/permission denied/);
     await expect(restricted.query(`INSERT INTO browser_observation_history DEFAULT VALUES`)).rejects.toThrow(/permission denied/);
     await expect(restricted.query('INSERT INTO property_records DEFAULT VALUES')).rejects.toThrow(/permission denied/);
@@ -242,6 +285,42 @@ integration('real PostgreSQL observation transaction', () => {
     await expect(restricted.query('SELECT * FROM property_identifiers')).rejects.toThrow(/permission denied/);
     expect((await admin.query("SELECT has_function_privilege('public','public.save_browser_observation(jsonb)','EXECUTE') AS allowed")).rows[0].allowed).toBe(false);
     await restricted.end();
+  });
+  it.runIf(!!process.env.BROWSER_OBSERVATION_EXTENSION_REPO)('sends the actual extension builder and worker payload through HTTP into the restricted SQL writer for a legacy record',async()=>{
+    const root=process.env.BROWSER_OBSERVATION_EXTENSION_REPO!;
+    const require=createRequire(import.meta.url);
+    const builder=require(resolve(root,'capture-requests.js'));
+    const extractor=require(resolve(root,'extract.js'));
+    const id=randomUUID(),zpid='53976377',url=`https://www.zillow.com/homedetails/${zpid}_zpid/`;
+    await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address) VALUES($1,'worker legacy','worker legacy')",[id]);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'parcel','R295041'),($1,'mls','262014608'),($1,'zillow_url','https://www.zillow.com/homes/5218-NE-18TH-AVE-Portland-OR_rb/')",[id]);
+    process.env.BROWSER_OBSERVATION_EXTENSION_ID='abcdefghijklmnopabcdefghijklmnop';process.env.BROWSER_OBSERVATION_TOKEN='test-token';
+    let requests=0;
+    const http=createHttpServer(async(req,res)=>{
+      const chunks=[];for await(const chunk of req) chunks.push(Buffer.from(chunk));
+      const response=await POST(new Request('https://dashboard.test/api/browser-observations',{method:'POST',headers: req.headers as Record<string,string>,body:Buffer.concat(chunks)}));
+      requests++;res.writeHead(response.status,{'content-type':'application/json'});res.end(await response.text());
+    });
+    await new Promise<void>(r=>http.listen(0,'127.0.0.1',r));
+    const port=(http.address() as {port:number}).port;
+    let listener: (m:unknown,s:unknown,r:(value:any)=>void)=>void;
+    const chrome={runtime:{id:'extension',onMessage:{addListener:(f:typeof listener)=>listener=f}},storage:{local:{setAccessLevel:async()=>{},get:async()=>({origin:'https://dashboard.test',token:'test-token'})}},tabs:{get:async()=>({url})},permissions:{contains:async()=>true}};
+    runInNewContext(readFileSync(resolve(root,'worker.js'),'utf8'),{chrome,URL,AbortSignal,TextEncoder,importScripts:()=>{},ZillowExtract:extractor,fetch:async(_url:string,init:RequestInit)=>fetch(`http://127.0.0.1:${port}/api/browser-observations`,{...init,headers:{...init.headers,Origin:'chrome-extension://abcdefghijklmnopabcdefghijklmnop'}})});
+    try {
+      const observation={zpid,url,observedAt:new Date().toISOString(),status:'Active',price:399000,fields:{parcel_id:'R295041',mls_number:'262014608',bedrooms:2}};
+      const captures=builder.build(observation,randomUUID);
+      const sender={id:'extension',frameId:0,tab:{id:1,url},url};
+      const send=()=>new Promise<any>(r=>listener({type:'observe',observation:{...observation,captures}},sender,r));
+      const result=await send();expect(result.ok).toBe(true);expect(requests).toBe(captures.length);
+      expect((await send()).changedFields).toEqual(result.changedFields);
+      expect((await admin.query("SELECT property_id FROM property_identifiers WHERE kind='zpid' AND value=$1",[zpid])).rows).toEqual([{property_id:id}]);
+      expect((await admin.query('SELECT count(*)::int n FROM browser_observation_field_history WHERE property_id=$1',[id])).rows[0].n).toBe(captures.length);
+      expect(JSON.stringify(result)).not.toContain('test-token');
+    } finally {
+      await new Promise<void>(r=>http.close(()=>r()));
+      await admin.query('DELETE FROM browser_observation_field_history WHERE property_id=$1',[id]);
+      await admin.query('DELETE FROM property_records WHERE id=$1',[id]);
+    }
   });
   it.runIf(!!process.env.BROWSER_OFFLINE_HTML)('renders the private saved page through production worker and authenticated HTTP into PostgreSQL',async()=>{
     const id='66666666-6666-4666-8666-666666666666';
