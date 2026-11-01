@@ -555,10 +555,11 @@ function PitiEstimate({ house, assumptions }: { house: HouseRecord; assumptions:
  * value and exact-year-ago YoY percentage — the same numbers as the Market
  * tab's table). Unknown/unmatched states are said plainly, never guessed. */
 function NeighborhoodLine({ house }: { house: HouseRecord }) {
+  const track = useTrack();
   if (!house.neighborhood) {
     return <span className="funnel-row-neighborhood funnel-row-neighborhood-unknown">Neighborhood unknown</span>;
   }
-  const market = house.neighborhoodMarket;
+  const market = track === "house" ? house.neighborhoodMarket : null;
   return (
     <span className="funnel-row-neighborhood">
       <span
@@ -584,7 +585,9 @@ function NeighborhoodLine({ house }: { house: HouseRecord }) {
           )}
         </span>
       ) : (
-        <span className="funnel-row-neighborhood-market"> {"\u00b7"} no Zillow ZHVI match</span>
+        <span className="funnel-row-neighborhood-market">
+          {"\u00b7"}{track === "plex" ? " SFR ZHVI not shown for plexes" : " no Zillow ZHVI match"}
+        </span>
       )}
     </span>
   );
