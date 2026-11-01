@@ -79,6 +79,43 @@ integration('real PostgreSQL observation transaction', () => {
       await admin.query('DELETE FROM property_records WHERE id=$1',[id]);
     }
   });
+  it.runIf(!!process.env.BROWSER_OBSERVATION_EXTENSION_REPO)('accepts verified jurisdiction parcel aliases through builder, worker, handler and restricted SQL', async () => {
+    const root=process.env.BROWSER_OBSERVATION_EXTENSION_REPO!, require=createRequire(import.meta.url);
+    const builder=require(resolve(root,'capture-requests.js')), id=randomUUID(), other=randomUUID();
+    const zpid='48615484', url=`https://www.zillow.com/homedetails/${zpid}_zpid/`;
+    const observation={zpid,url,observedAt:new Date().toISOString(),status:'Active',price:779000,legacyUrl:'https://www.zillow.com/homes/13414-NW-Sherry-St-Portland-OR-97229_rb/',fields:{parcel_id:'R636093',mls_number:'741838046'}};
+    await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address,parcel_id,track) VALUES($1,'Sherry fixture','SHERRY FIXTURE','W338545','plex'),($2,'other parcel','OTHER PARCEL','R999999','house')",[id,other]);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value,source) VALUES($1,'zpid',$3,'fixture'),($1,'parcel','W338545','original'),($1,'verified_parcel_alias','R636093','official-equivalence'),($1,'mls','741838046','fixture'),($2,'parcel','R999999','fixture')",[id,other,zpid]);
+    await admin.query("INSERT INTO property_listing_events(property_id,event_type,status,price,source,observed_at) VALUES($1,'listed','Active',779000,'fixture',now()-interval '1 minute')",[id]);
+    await admin.query("INSERT INTO property_collections(property_id,collection,track) VALUES($1,'watchlist','plex')",[id]);
+    await admin.query("INSERT INTO property_funnel_ranks(property_id,rank_key) VALUES($1,'b')",[id]);
+    await admin.query("INSERT INTO property_editor_notes(property_id,field,value) VALUES($1,'remarks','preserve')",[id]);
+    const snapshot=async()=>{const s:Record<string,unknown>={};for(const t of ['property_records','property_identifiers','property_collections','property_funnel_ranks','property_editor_notes','property_listing_events'])s[t]=(await admin.query(`SELECT row_to_json(t) r FROM ${t} t WHERE ${t==='property_records'?'id':'property_id'}=$1 ORDER BY row_to_json(t)::text`,[id])).rows;return s};
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zillow_url',$2)",[id,observation.legacyUrl]);
+    const before=await snapshot();
+    process.env.BROWSER_OBSERVATION_EXTENSION_ID='abcdefghijklmnopabcdefghijklmnop';process.env.BROWSER_OBSERVATION_TOKEN='test-token';
+    let listener:any;const chrome={runtime:{id:'ext',onMessage:{addListener:(f:any)=>listener=f}},storage:{local:{setAccessLevel:async()=>{},get:async()=>({origin:'https://dashboard.test',token:'test-token'})}},tabs:{get:async()=>({url})},permissions:{contains:async()=>true}};
+    const transport=async(_:string,init:any)=>POST(new Request('https://dashboard.test/api/browser-observations',{method:'POST',headers:{...init.headers,origin:'chrome-extension://abcdefghijklmnopabcdefghijklmnop'},body:init.body}));
+    runInNewContext(readFileSync(resolve(root,'worker.js'),'utf8'),{chrome,URL,AbortSignal,TextEncoder,importScripts:()=>{},ZillowExtract:require(resolve(root,'extract.js')),fetch:transport});
+    const send=async(parcel:string)=>{const o={...observation,fields:{...observation.fields,parcel_id:parcel}},captures=builder.build(o,randomUUID).slice(0,1);return new Promise<any>(r=>listener({type:'observe',observation:{...o,captures}},{id:'ext',frameId:0,tab:{id:1,url},url},r))};
+    try {
+      expect(await send('R636093')).toEqual({ok:true,changedFields:[]});
+      const identity=builder.build(observation,randomUUID)[0];
+      expect((await admin.query('SELECT public.resolve_browser_tracking_identity($1::jsonb) id',[JSON.stringify(identity)])).rows[0].id).toBe(id);
+      expect(await send('W338545')).toEqual({ok:true,changedFields:[]});
+      for(const parcel of ['R999999','R636094','338545'])expect(await send(parcel)).toEqual({ok:false,reason:'not-tracked'});
+      // Even an explicitly duplicated alias cannot override another owner's canonical parcel.
+      await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'verified_parcel_alias','R999999')",[id]);
+      expect(await send('R999999')).toEqual({ok:false,reason:'not-tracked'});
+      await admin.query("DELETE FROM property_identifiers WHERE property_id=$1 AND value='R999999'",[id]);
+      expect(await snapshot()).toEqual(before);
+      const writer=new Pool({connectionString:process.env.BROWSER_OBSERVATION_DATABASE_URL});
+      try {await expect(writer.query('SELECT * FROM property_editor_notes')).rejects.toThrow();await expect(writer.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'parcel','BAD')",[id])).rejects.toThrow()}finally{await writer.end()}
+    } finally {
+      await admin.query('DELETE FROM browser_observation_field_history WHERE property_id=$1',[id]);
+      await admin.query('DELETE FROM property_records WHERE id=ANY($1::uuid[])',[[id,other]]);
+    }
+  });
   it('rejected intake rolls back identity binding and later observation stays unmatched', async () => {
     const id=randomUUID(),zpid='998881';
     await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address,parcel_id) VALUES($1,'123 Correct Ave','123 CORRECT AVE','R998881')",[id]);
@@ -236,7 +273,7 @@ integration('real PostgreSQL observation transaction', () => {
     await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address,parcel_id,track) VALUES($1::uuid,($1::uuid)::text,($1::uuid)::text,$3,'plex'),($2::uuid,($2::uuid)::text,($2::uuid)::text,'OTHERPARCEL','house')",[id,other,c.parcel]);
     await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zillow_url',$2),($1,'mls',$3)",[id,alias,c.old]);await admin.query("INSERT INTO property_collections(property_id,collection,track) VALUES($1,'tour-shortlist','plex')",[id]);await admin.query("INSERT INTO property_funnel_ranks(property_id,rank_key) VALUES($1,'p234')",[id]);
     const schema=readFileSync(new URL('../scripts/browser-observation-schema.sql',import.meta.url),'utf8');const start=schema.indexOf('CREATE OR REPLACE FUNCTION public.resolve_browser_observation_identity'),end=schema.indexOf('END; $$;',start)+8;
-    const marker="(evidence ? 'parcelId' AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId')))";
+    const marker="(evidence ? 'parcelId' AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId'\n       AND NOT EXISTS (SELECT 1 FROM public.property_identifiers a WHERE a.property_id=tracked\n         AND a.kind='verified_parcel_alias' AND a.value=evidence->>'parcelId'))))";
     const oldClause="(evidence ? 'parcelId' AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId') OR (evidence ? 'mlsNumber' AND lower(i.kind) IN ('mls','mls_number') AND NOT EXISTS (SELECT 1 FROM public.property_identifiers m WHERE m.property_id=tracked AND lower(m.kind) IN ('mls','mls_number') AND m.value=evidence->>'mlsNumber'))))";
     expect(schema.slice(start,end)).toContain(marker);const old=schema.slice(start,end).replace('public.resolve_browser_observation_identity','pg_temp.old_nova_resolver').replace(marker,oldClause);const conn=await admin.connect();
     try{await conn.query('BEGIN');await conn.query(old);expect((await conn.query('SELECT pg_temp.old_nova_resolver($1::jsonb) id',[JSON.stringify(captures[0])])).rows[0].id).toBeNull();await conn.query('ROLLBACK')}finally{conn.release()}

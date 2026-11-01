@@ -62,7 +62,7 @@ BEGIN
   END IF;
   IF evidence IS NOT NULL THEN
     SELECT array_agg(DISTINCT property_id) INTO parcels FROM (
-      SELECT property_id FROM public.property_identifiers WHERE lower(kind) IN ('parcel','parcel_id') AND value=evidence->>'parcelId'
+      SELECT property_id FROM public.property_identifiers WHERE lower(kind) IN ('parcel','parcel_id','verified_parcel_alias') AND value=evidence->>'parcelId'
       UNION SELECT id FROM public.property_records WHERE parcel_id=evidence->>'parcelId'
     ) p;
     SELECT array_agg(DISTINCT property_id) INTO listings FROM public.property_identifiers WHERE lower(kind) IN ('mls','mls_number') AND value=evidence->>'mlsNumber';
@@ -76,15 +76,21 @@ BEGIN
   tracked:=ids[1];
   PERFORM pg_advisory_xact_lock(hashtextextended('property:' || tracked::text,0));
   PERFORM 1 FROM public.property_records WHERE id=tracked FOR UPDATE;
+  -- A verified parcel alias may differ from the canonical jurisdiction ID.
+  -- Unknown parcel values and aliases owned by another record still reject.
   -- Reject contradictory identifiers even when another alias selected the row.
   IF EXISTS (SELECT 1 FROM public.property_identifiers i WHERE i.property_id=tracked AND
     (((lower(i.kind) IN ('zpid','zillow_zpid') OR (lower(i.kind)='zillow' AND i.value ~ '^[1-9][0-9]{0,19}$')) AND i.value<>observation->>'zpid') OR
      (lower(i.kind) IN ('zillow_url','zillow','listing_url') AND i.value ~* '^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?[1-9][0-9]*_zpid/?([?#].*)?$'
        AND i.value !~* ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$')) OR
-     (evidence ? 'parcelId' AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId')))
+     (evidence ? 'parcelId' AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId'
+       AND NOT EXISTS (SELECT 1 FROM public.property_identifiers a WHERE a.property_id=tracked
+         AND a.kind='verified_parcel_alias' AND a.value=evidence->>'parcelId'))))
     THEN RETURN NULL; END IF;
   IF evidence ? 'parcelId' AND EXISTS (SELECT 1 FROM public.property_records p
-    WHERE p.id=tracked AND p.parcel_id IS NOT NULL AND p.parcel_id<>evidence->>'parcelId') THEN RETURN NULL; END IF;
+    WHERE p.id=tracked AND p.parcel_id IS NOT NULL AND p.parcel_id<>evidence->>'parcelId'
+      AND NOT EXISTS (SELECT 1 FROM public.property_identifiers a WHERE a.property_id=tracked
+         AND a.kind='verified_parcel_alias' AND a.value=evidence->>'parcelId')) THEN RETURN NULL; END IF;
   IF evidence ? 'legacyUrl' AND EXISTS (SELECT 1 FROM public.property_identifiers i WHERE i.property_id=tracked
     AND lower(i.kind) IN ('zillow_url','zillow','listing_url') AND public.browser_legacy_alias_key(i.value) ~ '-[0-9]{5}_rb/$'
     AND regexp_replace(public.browser_legacy_alias_key(i.value),'-[0-9]{5}_rb/$', '_rb/')=regexp_replace(public.browser_legacy_alias_key(evidence->>'legacyUrl'),'-[0-9]{5}_rb/$', '_rb/')
@@ -135,7 +141,7 @@ BEGIN
   END IF;
   IF evidence IS NOT NULL THEN
     SELECT array_agg(DISTINCT property_id) INTO parcels FROM (
-      SELECT property_id FROM public.property_identifiers WHERE lower(kind) IN ('parcel','parcel_id') AND value=evidence->>'parcelId'
+      SELECT property_id FROM public.property_identifiers WHERE lower(kind) IN ('parcel','parcel_id','verified_parcel_alias') AND value=evidence->>'parcelId'
       UNION SELECT id FROM public.property_records WHERE parcel_id=evidence->>'parcelId'
     ) p;
     SELECT array_agg(DISTINCT property_id) INTO listings FROM public.property_identifiers WHERE lower(kind) IN ('mls','mls_number') AND value=evidence->>'mlsNumber';
@@ -144,15 +150,21 @@ BEGIN
   IF coalesce(cardinality(ids),0)<>1 THEN RETURN NULL; END IF;
   tracked:=ids[1];
   IF NOT EXISTS (SELECT 1 FROM public.property_records WHERE id=tracked AND track='plex') THEN RETURN NULL; END IF;
+  -- A verified parcel alias may differ from the canonical jurisdiction ID.
+  -- Unknown parcel values and aliases owned by another record still reject.
   -- Reject contradictory identifiers even when another alias selected the row.
   IF EXISTS (SELECT 1 FROM public.property_identifiers i WHERE i.property_id=tracked AND
     (((lower(i.kind) IN ('zpid','zillow_zpid') OR (lower(i.kind)='zillow' AND i.value ~ '^[1-9][0-9]{0,19}$')) AND i.value<>observation->>'zpid') OR
      (lower(i.kind) IN ('zillow_url','zillow','listing_url') AND i.value ~* '^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?[1-9][0-9]*_zpid/?([?#].*)?$'
        AND i.value !~* ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$')) OR
-     (evidence ? 'parcelId' AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId')))
+     (evidence ? 'parcelId' AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId'
+       AND NOT EXISTS (SELECT 1 FROM public.property_identifiers a WHERE a.property_id=tracked
+         AND a.kind='verified_parcel_alias' AND a.value=evidence->>'parcelId'))))
     THEN RETURN NULL; END IF;
   IF evidence ? 'parcelId' AND EXISTS (SELECT 1 FROM public.property_records p
-    WHERE p.id=tracked AND p.parcel_id IS NOT NULL AND p.parcel_id<>evidence->>'parcelId') THEN RETURN NULL; END IF;
+    WHERE p.id=tracked AND p.parcel_id IS NOT NULL AND p.parcel_id<>evidence->>'parcelId'
+      AND NOT EXISTS (SELECT 1 FROM public.property_identifiers a WHERE a.property_id=tracked
+         AND a.kind='verified_parcel_alias' AND a.value=evidence->>'parcelId')) THEN RETURN NULL; END IF;
   IF evidence ? 'legacyUrl' AND EXISTS (SELECT 1 FROM public.property_identifiers i WHERE i.property_id=tracked
     AND lower(i.kind) IN ('zillow_url','zillow','listing_url') AND public.browser_legacy_alias_key(i.value) ~ '-[0-9]{5}_rb/$'
     AND regexp_replace(public.browser_legacy_alias_key(i.value),'-[0-9]{5}_rb/$', '_rb/')=regexp_replace(public.browser_legacy_alias_key(evidence->>'legacyUrl'),'-[0-9]{5}_rb/$', '_rb/')
