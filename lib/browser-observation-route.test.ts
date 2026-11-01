@@ -3,7 +3,7 @@ vi.mock('./browser-observation-writes', () => ({saveObservation:vi.fn(async () =
 import { POST, OPTIONS } from '../app/api/browser-observations/route';
 const id='abcdefghijklmnopabcdefghijklmnop';
 const origin=`chrome-extension://${id}`;
-const body=()=>JSON.stringify({zpid:'123',url:'https://www.zillow.com/homedetails/123_zpid/',observedAt:new Date().toISOString(),status:'Active',price:500000});
+const body=()=>JSON.stringify({zpid:'123',captureId:'11111111-1111-4111-8111-111111111111',url:'https://www.zillow.com/homedetails/123_zpid/',observedAt:new Date().toISOString(),status:'Active',price:500000});
 function req(auth='Bearer secret', o=origin, payload=body()) { return new Request('https://dashboard.test/api/browser-observations',{method:'POST',headers:{origin:o,authorization:auth,'content-type':'application/json'},body:payload}); }
 beforeEach(()=>{process.env.BROWSER_OBSERVATION_EXTENSION_ID=id;process.env.BROWSER_OBSERVATION_TOKEN='secret';});
 describe('browser endpoint',()=>{

@@ -1,6 +1,7 @@
 import { Pool } from 'pg';
 import { captureFingerprint, fingerprint, type Observation } from './browser-observations';
 let pool: Pool | undefined;
+export async function closeBrowserObservationPool() { const active = pool; pool = undefined; await active?.end(); }
 export async function saveObservation(o: Observation) {
   if (!process.env.BROWSER_OBSERVATION_DATABASE_URL) throw new Error('unavailable');
   pool ??= new Pool({ connectionString: process.env.BROWSER_OBSERVATION_DATABASE_URL, max: 3 });
@@ -19,7 +20,7 @@ export async function saveObservation(o: Observation) {
     const current = await c.query<{latest_price:number|null;latest_status:string|null;latest_status_observed_at:Date|null}>('SELECT latest_price, latest_status, latest_status_observed_at FROM property_current WHERE id=$1', [id]);
     const row = current.rows[0];
     await c.query('INSERT INTO browser_observation_history (property_id,zpid,source_url,observed_at,content_hash,capture_hash,price,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [id,o.zpid,o.url,o.observedAt,hash,captureHash,o.price ?? null,o.status ?? null]);
-    await c.query(`INSERT INTO property_listing_events (property_id,event_type,price,status,source,source_ref,observed_at) VALUES ($1,'browser_observation',$2,$3,'zillow-browser',$4,$5)`, [id,o.price ?? null,o.status ?? null,o.url,o.observedAt]);
+    await c.query(`INSERT INTO property_listing_events (property_id,event_type,price,status,source,source_ref,observed_at) VALUES ($1,'browser_observation',$2,$3,'zillow-browser',$4,LEAST($5::timestamptz, statement_timestamp()))`, [id,o.price ?? null,o.status ?? null,o.url,o.observedAt]);
     const updated = await c.query<{latest_price:number|null;latest_status:string|null}>('SELECT latest_price, latest_status FROM property_current WHERE id=$1', [id]);
     const changedFields: string[] = [];
     if (row.latest_price !== updated.rows[0].latest_price) changedFields.push('price');

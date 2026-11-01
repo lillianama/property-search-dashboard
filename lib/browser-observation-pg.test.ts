@@ -1,0 +1,83 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createServer, type Server, type Socket } from 'node:net';
+import { spawn } from 'node:child_process';
+import { Pool } from 'pg';
+import { saveObservation, closeBrowserObservationPool } from './browser-observation-writes';
+import type { Observation } from './browser-observations';
+
+// Explicit opt-in: this bridge targets only the dedicated disposable test container.
+const integration = process.env.BROWSER_OBSERVATION_PG_TEST === '1' ? describe : describe.skip;
+integration('real PostgreSQL observation transaction', () => {
+  let server: Server, admin: Pool;
+  const sockets = new Set<Socket>();
+  const property = '11111111-1111-4111-8111-111111111111';
+  const base: Observation = {zpid:'123',url:'https://www.zillow.com/homedetails/123_zpid/',captureId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',observedAt:new Date(Date.now()-10000).toISOString(),status:'Active',price:500000};
+  beforeAll(async () => {
+    server = createServer(socket => {
+      sockets.add(socket); socket.on('close', () => sockets.delete(socket));
+      const child = spawn('docker',['exec','-i','property-browser-api-test-pg','nc','127.0.0.1','5432'],{stdio:['pipe','pipe','ignore']});
+      socket.pipe(child.stdin); child.stdout.pipe(socket); socket.on('close',()=>child.kill()); child.on('close',()=>socket.destroy());
+    });
+    await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+    const port=(server.address() as {port:number}).port;
+    const url=`postgresql://postgres@127.0.0.1:${port}/postgres`;
+    admin = new Pool({connectionString:url});
+    process.env.BROWSER_OBSERVATION_DATABASE_URL=`postgresql://browser_observation_writer@127.0.0.1:${port}/postgres`;
+    await admin.query('DROP TRIGGER IF EXISTS reject_test_event ON property_listing_events');
+    await admin.query('DROP FUNCTION IF EXISTS reject_test_event()');
+    await admin.query('TRUNCATE property_records CASCADE');
+    await admin.query(`INSERT INTO property_records(id,canonical_address,normalized_address) VALUES ($1,'fixture','fixture')`,[property]);
+    await admin.query(`INSERT INTO property_identifiers(property_id,kind,value) VALUES ($1,'zillow_url','https://www.zillow.com/homedetails/example/123_zpid/')`,[property]);
+    await admin.query(`INSERT INTO property_listing_events(property_id,event_type,event_date,price,status,source,observed_at) VALUES ($1,'sold',current_date - 100,300000,'Sold','fixture',now())`,[property]);
+    await admin.query(`INSERT INTO property_editor_judgments(property_id,field,verdict) VALUES ($1,'drum_space','no')`,[property]);
+    await admin.query(`INSERT INTO property_funnel_ranks(property_id,rank_key) VALUES ($1,'b')`,[property]);
+    await admin.query(`INSERT INTO property_collections(property_id,collection,track) VALUES ($1,'rejected','house')`,[property]);
+    await admin.query(`INSERT INTO property_editor_notes(property_id,field,value) VALUES ($1,'remarks','keep')`,[property]);
+  });
+  afterAll(async()=>{ await closeBrowserObservationPool(); await admin?.end(); for (const socket of sockets) socket.destroy(); server?.close(); });
+  it('projects current facts; retries, concurrent writes, stale evidence and rollback preserve invariants',async()=>{
+    const a = await saveObservation(base);
+    expect(a).toEqual({matched:true,zpid:'123',changedFields:['price','status']});
+    expect((await saveObservation(base)).changedFields).toEqual([]);
+    const b={...base,captureId:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',observedAt:new Date(Date.now()-5000).toISOString(),price:510000,status:'Pending' as const};
+    expect((await saveObservation(b)).changedFields).toEqual(['price','status']);
+    expect((await saveObservation({...base,observedAt:new Date().toISOString()})).changedFields).toEqual([]);
+    const stale={...base,captureId:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',observedAt:new Date(Date.now()-20000).toISOString(),price:400000};
+    expect((await saveObservation(stale)).changedFields).toEqual([]);
+    const concurrent={...b,captureId:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',observedAt:new Date().toISOString(),price:520000};
+    const results=await Promise.all([saveObservation(concurrent),saveObservation(concurrent)]);
+    expect(results.map(r=>r.changedFields.length).sort()).toEqual([0,1]);
+    const current=await admin.query('SELECT latest_price,latest_status FROM property_current WHERE id=$1',[property]);
+    expect(current.rows[0]).toEqual({latest_price:520000,latest_status:'Pending'});
+    expect((await admin.query('SELECT value FROM property_editor_notes WHERE property_id=$1',[property])).rows).toEqual([{value:'keep'}]);
+    expect((await admin.query('SELECT field,verdict FROM property_editor_judgments WHERE property_id=$1',[property])).rows).toEqual([{field:'drum_space',verdict:'no'}]);
+    expect((await admin.query('SELECT rank_key FROM property_funnel_ranks WHERE property_id=$1',[property])).rows).toEqual([{rank_key:'b'}]);
+    expect((await admin.query('SELECT collection FROM property_collections WHERE property_id=$1',[property])).rows).toEqual([{collection:'rejected'}]);
+    const future={...concurrent,captureId:'99999999-9999-4999-8999-999999999999',observedAt:new Date(Date.now()+240000).toISOString(),price:530000};
+    expect((await saveObservation(future)).changedFields).toEqual(['price']);
+    expect((await admin.query("SELECT observed_at <= now() AS safe FROM property_listing_events WHERE price=530000")).rows[0].safe).toBe(true);
+    await admin.query('SELECT pg_sleep(0.01)');
+    const newer={...concurrent,captureId:'88888888-8888-4888-8888-888888888888',observedAt:new Date().toISOString(),price:540000};
+    expect((await saveObservation(newer)).changedFields).toEqual(['price']);
+    await admin.query("INSERT INTO property_listing_events(property_id,event_type,price,status,source,observed_at) VALUES ($1,'listing',550000,'Active','other',now())",[property]);
+    const late={...stale,captureId:'77777777-7777-4777-8777-777777777777',price:410000};
+    expect((await saveObservation(late)).changedFields).toEqual([]);
+    expect((await admin.query('SELECT latest_price,latest_status FROM property_current WHERE id=$1',[property])).rows[0]).toEqual({latest_price:550000,latest_status:'Active'});
+    const countBefore=Number((await admin.query('SELECT count(*) AS n FROM browser_observation_history')).rows[0].n);
+    await admin.query(`CREATE FUNCTION reject_test_event() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.price=999999 THEN RAISE EXCEPTION 'test rollback'; END IF; RETURN NEW; END $$`);
+    await admin.query('CREATE TRIGGER reject_test_event BEFORE INSERT ON property_listing_events FOR EACH ROW EXECUTE FUNCTION reject_test_event()');
+    await expect(saveObservation({...concurrent,captureId:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',price:999999})).rejects.toThrow();
+    expect(Number((await admin.query('SELECT count(*) AS n FROM browser_observation_history')).rows[0].n)).toBe(countBefore);
+  });
+  it('rejects unknown and ambiguous identities without creating properties',async()=>{
+    const unknown={...base,zpid:'456',url:'https://www.zillow.com/homedetails/456_zpid/'};
+    expect((await saveObservation(unknown)).matched).toBe(false);
+    await admin.query(`INSERT INTO property_records(id,canonical_address,normalized_address) VALUES ('22222222-2222-4222-8222-222222222222','other','other')`);
+    await admin.query(`INSERT INTO property_identifiers(property_id,kind,value) VALUES ('22222222-2222-4222-8222-222222222222','zpid','123')`);
+    expect((await saveObservation({...base,captureId:'ffffffff-ffff-4fff-8fff-ffffffffffff'})).matched).toBe(false);
+    expect(Number((await admin.query('SELECT count(*) AS n FROM property_records')).rows[0].n)).toBe(2);
+    const restricted=new Pool({connectionString:process.env.BROWSER_OBSERVATION_DATABASE_URL});
+    await expect(restricted.query(`UPDATE property_editor_notes SET value='changed'`)).rejects.toThrow();
+    await restricted.end();
+  });
+});
