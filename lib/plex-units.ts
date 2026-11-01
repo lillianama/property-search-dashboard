@@ -6,6 +6,9 @@ export interface UnitSummary {
   occupancy: "occupied" | "vacant" | "unknown";
   actualMonthlyRent: number | null;
   expectedMonthlyRent: number | null;
+  actualRentBasis?: string | null;
+  expectedRentSource?: string | null;
+  expectedRentBasis?: string | null;
   source: string;
   asOf: string | null;
 }
@@ -45,6 +48,9 @@ export function normalizeUnits(row: UnitSourceRow): UnitSummary[] {
       occupancy: v.occupancy === "occupied" || v.occupancy === "vacant" ? v.occupancy : "unknown",
       actualMonthlyRent: number(v.actualRent),
       expectedMonthlyRent: number(v.expectedMonthlyRent),
+      actualRentBasis: typeof v.actualRentBasis === "string" ? v.actualRentBasis : null,
+      expectedRentSource: typeof v.expectedRentSource === "string" ? v.expectedRentSource : null,
+      expectedRentBasis: typeof v.expectedRentBasis === "string" ? v.expectedRentBasis : null,
       source: row.source, asOf: date(row.observed_at),
     } satisfies UnitSummary];
   });

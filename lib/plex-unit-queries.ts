@@ -14,7 +14,10 @@ export const PLEX_UNIT_SQL = `
         (SELECT jsonb_agg(jsonb_build_object(
           'bedrooms', CASE WHEN jsonb_typeof(u->'bedrooms') = 'number' THEN u->'bedrooms' END, 'bathrooms', CASE WHEN jsonb_typeof(u->'bathrooms') = 'number' THEN u->'bathrooms' END,
           'sqft', CASE WHEN jsonb_typeof(u->'sqft') = 'number' THEN u->'sqft' END, 'occupancy', CASE WHEN u->>'occupancy' IN ('occupied', 'vacant') THEN u->'occupancy' END,
-          'actualRent', CASE WHEN jsonb_typeof(u->'actualRent') = 'number' THEN u->'actualRent' END, 'expectedMonthlyRent', CASE WHEN jsonb_typeof(u->'expectedMonthlyRent') = 'number' THEN u->'expectedMonthlyRent' END
+          'actualRent', CASE WHEN jsonb_typeof(u->'actualRent') = 'number' THEN u->'actualRent' END, 'actualRentBasis', CASE WHEN jsonb_typeof(u->'actualRentBasis') = 'string' THEN u->'actualRentBasis' END,
+          'expectedRentSource', CASE WHEN jsonb_typeof(u->'expectedRentSource') = 'string' THEN u->'expectedRentSource' END,
+          'expectedRentBasis', CASE WHEN jsonb_typeof(u->'expectedRentBasis') = 'string' THEN u->'expectedRentBasis' END,
+          'expectedMonthlyRent', CASE WHEN jsonb_typeof(u->'expectedMonthlyRent') = 'number' THEN u->'expectedMonthlyRent' END
         ) ORDER BY ordinal)
         FROM jsonb_array_elements(o.value) WITH ORDINALITY AS units(u, ordinal)
         WHERE jsonb_typeof(u) = 'object')

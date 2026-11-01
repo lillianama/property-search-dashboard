@@ -13,7 +13,7 @@ vi.mock("../app/components/PropertyPhoto", () => ({ PropertyPhoto: () => null })
 const row = (field: UnitSourceRow["field"], value: unknown, observed_at = "2026-11-01"): UnitSourceRow =>
   ({ property_id: "test", field, value, observed_at, source: "enriched-source" });
 const summary = (rents: (number | null)[] = [2000, 2500], count: number | null = 2) =>
-  selectPlexUnits([row("unit_mix", rents.map(expectedMonthlyRent => ({ expectedMonthlyRent, actualRent: 100, occupancy: "occupied", raw: "private" }))),
+  selectPlexUnits([row("unit_mix", rents.map(expectedMonthlyRent => ({ expectedMonthlyRent, actualRent: null, occupancy: "occupied", raw: "private" }))),
     ...(count === null ? [] : [row("unit_count", count)])]).get("test")!;
 const piti = computePiti({ price: 500000, actualAnnualTax: 6000 }, DEFAULT_PITI_ASSUMPTIONS)!;
 
@@ -66,5 +66,55 @@ describe("whole-building estimated net income", () => {
     expect(meta.indexOf("Est. net income")).toBeLessThan(meta.indexOf('class="funnel-row-actions"'));
     expect(render("house")).not.toContain("Est. net income");
     expect(render("house")).toBe(render("house", { ...house, plexUnits: undefined }));
+  });
+});
+
+describe("conservative comparable rent basis", () => {
+  const make = (actuals: (number | null)[], estimates: (number | null)[], extra = {}) =>
+    selectPlexUnits([row("unit_count", 2), row("unit_mix", actuals.map((actualRent, i) => ({
+      actualRent, expectedMonthlyRent: estimates[i], occupancy: "occupied",
+      actualRentBasis: "RMLS unit table; listing-reported, not lease-verified",
+      expectedRentSource: "RentCast long-term AVM",
+      expectedRentBasis: "Projected per documented unit", ...extra,
+    })))]).get("test")!;
+  it.each([
+    [[1000, 1200], [2000, 2500], 2200, 4500, "actual", 2200],
+    [[2500, 2600], [2000, 2500], 5100, 4500, "estimated", 4500],
+    [[1000, 1200], [null, null], 2200, null, "actual", 2200],
+    [[null, null], [2000, 2500], null, 4500, "estimated", 4500],
+    [[1000, null], [2000, 2500], null, 4500, "estimated", 4500],
+    [[0, 0], [2000, 2500], 0, 4500, "actual", 0],
+    [[null, null], [null, null], null, null, null, null],
+  ] as const)("selects complete totals %#", (actuals, estimates, actualRent, estimatedRent, basis, rent) => {
+    const result = plexNetIncome(make([...actuals], [...estimates]), piti);
+    expect(result).toMatchObject({ actualRent, estimatedRent, basis, rent });
+    expect(result.amount).toBe(rent === null ? null : rent - piti.monthlyTotal);
+  });
+  it.each(["Projected rent", "proforma", "pro-forma", "historical annual rent", "unknown scope", "No supported allocation"])(
+    "rejects explicit incompatible actual basis %s", actualRentBasis => {
+      expect(plexNetIncome(make([1000, 1200], [null, null], { actualRentBasis }), piti).rent).toBeNull();
+    });
+  it.each(["vacant", "unknown"])("rejects actuals without compatible occupancy %s", occupancy => {
+    expect(plexNetIncome(make([0, 1200], [null, null], { occupancy }), piti).actualRent).toBeNull();
+  });
+  it("keeps the numeric listing contract and requires recorded whole-property count", () => {
+    const value = make([1000, 1200], [null, null], { actualRentBasis: undefined });
+    expect(plexNetIncome(value, piti).basis).toBe("actual");
+    expect(plexNetIncome({ ...value, recordedUnitCount: null }, piti).rent).toBeNull();
+    expect(plexNetIncome({ ...value, recordedUnitCount: { count: 3, source: "RMLS", asOf: null } }, piti).rent).toBeNull();
+  });
+  it("explains source provenance, comparison, scope and exclusions", () => {
+    const value = make([1000, null], [2000, 2500]);
+    const html = renderToStaticMarkup(createElement(PlexNetIncome, { summary: value, piti }));
+    expect(html).toContain("lower of complete comparable whole-property");
+    expect(html).toContain("not lease-verified collection");
+    expect(html).toContain("Unknown / incomplete or noncomparable scope");
+    expect(html).toContain("$4,500/mo");
+    expect(html).toContain("all units before owner occupancy");
+    expect(html).toContain("RentCast long-term AVM");
+    expect(html).toContain("RMLS unit table");
+    expect(html).toContain("HOA dues");
+    expect(value.units[0]).toMatchObject({ actualRentBasis: "RMLS unit table; listing-reported, not lease-verified",
+      expectedRentSource: "RentCast long-term AVM", expectedRentBasis: "Projected per documented unit" });
   });
 });

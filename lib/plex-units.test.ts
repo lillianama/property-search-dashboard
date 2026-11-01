@@ -12,6 +12,7 @@ describe("plex unit normalization and rendering", () => {
     const units = normalizeUnits(row([{ bedrooms: 0, bathrooms: 1, actualRent: 0, expectedMonthlyRent: 900,
       occupancy: "vacant", owner: "private", raw: { secret: true } }]));
     expect(units).toEqual([{ label: "Unit 1 (source order)", beds: 0, baths: 1, sqft: null,
+      actualRentBasis: null, expectedRentSource: null, expectedRentBasis: null,
       actualMonthlyRent: 0, expectedMonthlyRent: 900, occupancy: "vacant", source: "test-source", asOf: "2026-01-01T00:00:00.000Z" }]);
     expect(normalizeUnits(row([{ actualRent: -10, bedrooms: "2", sqft: Infinity, occupancy: "tenant-name" }], { observed_at: "invalid" }))[0])
       .toMatchObject({ actualMonthlyRent: null, beds: null, sqft: null, occupancy: "unknown", asOf: null });

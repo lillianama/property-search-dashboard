@@ -12,6 +12,9 @@ it("projects unit keys inside PostgreSQL and returns only typed allowlisted fiel
   expect(query).toHaveBeenCalledWith(PLEX_UNIT_SQL, [["test"]]);
   expect(PLEX_UNIT_SQL).toContain("p.track = 'plex'");
   expect(PLEX_UNIT_SQL).toContain("jsonb_build_object");
+  for (const key of ["actualRentBasis", "expectedRentSource", "expectedRentBasis"]) {
+    expect(PLEX_UNIT_SQL).toContain(`jsonb_typeof(u->'${key}') = 'string'`);
+  }
   expect(PLEX_UNIT_SQL).not.toMatch(/\braw\b|payload|source_ref|SELECT\s+\*|THEN o.value\s*WHEN o.field = 'unit_mix'/);
   expect(JSON.stringify([...result.values()])).not.toMatch(/owner|must not escape|property_id|"value"/);
   query.mockClear();
