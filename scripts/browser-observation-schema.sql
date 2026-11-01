@@ -99,6 +99,94 @@ BEGIN
 END; $$;
 REVOKE ALL ON FUNCTION public.resolve_browser_observation_identity(jsonb) FROM PUBLIC;
 
+-- Independent read-only exact-source resolver; capture resolver remains unchanged.
+CREATE OR REPLACE FUNCTION public.resolve_browser_tracking_identity(observation jsonb)
+RETURNS uuid LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE
+  evidence jsonb := observation->'identity';
+  ids uuid[]; sources uuid[]; parcels uuid[]; listings uuid[]; tracked uuid;
+BEGIN
+  IF NOT evidence ? 'legacyUrl' THEN RETURN NULL; END IF;
+  IF observation ? 'identity' THEN
+    IF jsonb_typeof(evidence) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'invalid identity' USING ERRCODE='22023'; END IF;
+    IF EXISTS (SELECT 1 FROM jsonb_object_keys(evidence) k WHERE k NOT IN ('parcelId','mlsNumber','legacyUrl'))
+      OR (NOT evidence ? 'legacyUrl' AND (SELECT count(*) FROM jsonb_object_keys(evidence))<>2)
+      OR (NOT evidence ? 'legacyUrl' AND NOT evidence ?& ARRAY['parcelId','mlsNumber'])
+      OR (evidence ? 'legacyUrl' AND (jsonb_typeof(evidence->'legacyUrl') IS DISTINCT FROM 'string'
+        OR evidence->>'legacyUrl' !~ '^https://www\.zillow\.com/homes/[0-9][A-Za-z0-9-]{4,200}-[A-Z]{2}-[0-9]{5}_rb/$'))
+      OR EXISTS (SELECT 1 FROM jsonb_each(evidence) WHERE key IN ('parcelId','mlsNumber')
+        AND (jsonb_typeof(value) IS DISTINCT FROM 'string' OR value #>> '{}' !~ '^[A-Za-z0-9-]{1,40}$'))
+      THEN RAISE EXCEPTION 'invalid identity' USING ERRCODE='22023'; END IF;
+  END IF;
+  SELECT array_agg(DISTINCT i.property_id) INTO ids FROM public.property_identifiers i
+    WHERE (lower(i.kind) IN ('zpid','zillow_zpid','zillow') AND i.value=observation->>'zpid')
+      OR (lower(i.kind) IN ('zillow_url','zillow','listing_url') AND i.value ~* ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$'));
+  IF coalesce(cardinality(ids),0)>1 THEN RETURN NULL; END IF;
+  IF evidence ? 'legacyUrl' THEN
+    -- Only known source aliases, never canonical-address similarity. A missing
+    -- ZIP in a stored alias is allowed; a different published ZIP is not.
+    SELECT array_agg(DISTINCT property_id) INTO sources FROM public.property_identifiers
+      WHERE lower(kind) IN ('zillow_url','zillow','listing_url')
+      AND public.browser_legacy_alias_key(value) IN (public.browser_legacy_alias_key(evidence->>'legacyUrl'),public.browser_legacy_alias_key(regexp_replace(evidence->>'legacyUrl','-[0-9]{5}_rb/$', '_rb/')));
+    IF coalesce(cardinality(sources),0)<>1 THEN RETURN NULL; END IF;
+    IF coalesce(cardinality(ids),0)=0 AND coalesce(cardinality(sources),0)=1 THEN
+      ids:=sources;
+    ELSIF coalesce(cardinality(sources),0)=1 AND ids[1]<>sources[1] THEN RETURN NULL; END IF;
+  END IF;
+  IF evidence IS NOT NULL THEN
+    SELECT array_agg(DISTINCT property_id) INTO parcels FROM (
+      SELECT property_id FROM public.property_identifiers WHERE lower(kind) IN ('parcel','parcel_id') AND value=evidence->>'parcelId'
+      UNION SELECT id FROM public.property_records WHERE parcel_id=evidence->>'parcelId'
+    ) p;
+    SELECT array_agg(DISTINCT property_id) INTO listings FROM public.property_identifiers WHERE lower(kind) IN ('mls','mls_number') AND value=evidence->>'mlsNumber';
+    IF EXISTS (SELECT 1 FROM unnest(parcels || listings) p WHERE p<>ids[1]) THEN RETURN NULL; END IF;
+  END IF;
+  IF coalesce(cardinality(ids),0)<>1 THEN RETURN NULL; END IF;
+  tracked:=ids[1];
+  IF NOT EXISTS (SELECT 1 FROM public.property_records WHERE id=tracked AND track='plex') THEN RETURN NULL; END IF;
+  -- Reject contradictory identifiers even when another alias selected the row.
+  IF EXISTS (SELECT 1 FROM public.property_identifiers i WHERE i.property_id=tracked AND
+    (((lower(i.kind) IN ('zpid','zillow_zpid') OR (lower(i.kind)='zillow' AND i.value ~ '^[1-9][0-9]{0,19}$')) AND i.value<>observation->>'zpid') OR
+     (lower(i.kind) IN ('zillow_url','zillow','listing_url') AND i.value ~* '^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?[1-9][0-9]*_zpid/?([?#].*)?$'
+       AND i.value !~* ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$')) OR
+     (evidence ? 'parcelId' AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId')))
+    THEN RETURN NULL; END IF;
+  IF evidence ? 'parcelId' AND EXISTS (SELECT 1 FROM public.property_records p
+    WHERE p.id=tracked AND p.parcel_id IS NOT NULL AND p.parcel_id<>evidence->>'parcelId') THEN RETURN NULL; END IF;
+  IF evidence ? 'legacyUrl' AND EXISTS (SELECT 1 FROM public.property_identifiers i WHERE i.property_id=tracked
+    AND lower(i.kind) IN ('zillow_url','zillow','listing_url') AND public.browser_legacy_alias_key(i.value) ~ '-[0-9]{5}_rb/$'
+    AND regexp_replace(public.browser_legacy_alias_key(i.value),'-[0-9]{5}_rb/$', '_rb/')=regexp_replace(public.browser_legacy_alias_key(evidence->>'legacyUrl'),'-[0-9]{5}_rb/$', '_rb/')
+    AND public.browser_legacy_alias_key(i.value)<>public.browser_legacy_alias_key(evidence->>'legacyUrl')) THEN RETURN NULL; END IF;
+  IF evidence ? 'mlsNumber' AND EXISTS (SELECT 1 FROM public.property_identifiers
+    WHERE property_id=tracked AND lower(kind) IN ('mls','mls_number') AND value<>evidence->>'mlsNumber') THEN RETURN NULL; END IF;
+  RETURN tracked;
+END; $$;
+REVOKE ALL ON FUNCTION public.resolve_browser_tracking_identity(jsonb) FROM PUBLIC;
+
+-- Tracking is separate from capture permission. No locks, aliases, facts, or ledgers
+-- are written; the unit ZPID is only checked for conflicts, never used as a match.
+CREATE OR REPLACE FUNCTION public.lookup_browser_tracking(o jsonb)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE parts text[];
+BEGIN
+  IF jsonb_typeof(o) IS DISTINCT FROM 'object' OR (SELECT count(*) FROM jsonb_object_keys(o))<>6
+    OR NOT o ?& ARRAY['action','scope','zpid','url','legacyUrl','identity']
+    OR EXISTS(SELECT 1 FROM jsonb_each(o) WHERE key<>'identity' AND jsonb_typeof(value)<>'string')
+    OR o->>'action' IS DISTINCT FROM 'tracking-lookup' OR o->>'scope' IS DISTINCT FROM 'apartment-range'
+    OR o->>'zpid' !~ '^[1-9][0-9]{0,19}$'
+    OR o->>'url' IS DISTINCT FROM 'https://www.zillow.com/homedetails/' || (o->>'zpid') || '_zpid/'
+    OR jsonb_typeof(o->'identity') IS DISTINCT FROM 'object'
+    OR EXISTS(SELECT 1 FROM jsonb_each(o->'identity') WHERE key NOT IN ('mlsNumber','parcelId') OR jsonb_typeof(value)<>'string' OR value #>> '{}' !~ '^[A-Za-z0-9-]{1,40}$')
+    THEN RAISE EXCEPTION 'invalid tracking lookup' USING ERRCODE='22023'; END IF;
+  parts:=regexp_match(o->>'legacyUrl','^https://www\.zillow\.com/homes/([1-9][0-9]{0,6})-([1-9][0-9]{0,6})-([A-Za-z][A-Za-z0-9-]{2,120})-Portland-OR-(97[0-9]{3})_rb/$');
+  IF parts IS NULL OR parts[1]::integer>=parts[2]::integer
+    OR parts[3] ~* '(^|-)(apt|apartment|unit|suite|ste|floor|fl|room|rm|lot)(-|$)'
+    THEN RAISE EXCEPTION 'invalid tracking range' USING ERRCODE='22023'; END IF;
+  RETURN jsonb_build_object('tracked',public.resolve_browser_tracking_identity(jsonb_build_object('zpid',o->>'zpid','identity',(o->'identity') || jsonb_build_object('legacyUrl',o->>'legacyUrl'))) IS NOT NULL);
+END; $$;
+REVOKE ALL ON FUNCTION public.lookup_browser_tracking(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.lookup_browser_tracking(jsonb) TO browser_observation_writer;
+
 CREATE OR REPLACE FUNCTION public.save_browser_observation_v1(observation jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER

@@ -93,3 +93,18 @@ export function parseIntake(value: unknown, now = Date.now()): BrowserIntake | n
   const t=Date.parse(o.observedAt); if (!Number.isFinite(t) || new Date(t).toISOString()!==o.observedAt || t>now+300000 || t<now-86400000) return null;
   return o as BrowserIntake;
 }
+
+export type TrackingLookup = {action:'tracking-lookup';scope:'apartment-range';zpid:string;url:string;legacyUrl:string;identity:{mlsNumber?:string;parcelId?:string}};
+export function parseTrackingLookup(value: unknown): TrackingLookup | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const o = value as TrackingLookup;
+  if (Object.keys(o).sort().join(',') !== 'action,identity,legacyUrl,scope,url,zpid'
+    || o.action !== 'tracking-lookup' || o.scope !== 'apartment-range'
+    || typeof o.zpid !== 'string' || !/^[1-9]\d{0,19}$/.test(o.zpid)
+    || o.url !== `https://www.zillow.com/homedetails/${o.zpid}_zpid/` || typeof o.legacyUrl !== 'string') return null;
+  const range = /^https:\/\/www\.zillow\.com\/homes\/([1-9]\d{0,6})-([1-9]\d{0,6})-([A-Za-z][A-Za-z0-9-]{2,120})-Portland-OR-(97\d{3})_rb\/$/.exec(o.legacyUrl);
+  if (!range || Number(range[1]) >= Number(range[2]) || /(?:^|-)(?:apt|apartment|unit|suite|ste|floor|fl|room|rm|lot)(?:-|$)/i.test(range[3])) return null;
+  if (!o.identity || typeof o.identity !== 'object' || Array.isArray(o.identity)
+    || Object.entries(o.identity).some(([k,v])=>!['mlsNumber','parcelId'].includes(k) || typeof v !== 'string' || !/^[A-Za-z0-9-]{1,40}$/.test(v))) return null;
+  return o;
+}

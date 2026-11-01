@@ -5,7 +5,7 @@ vi.mock('pg', () => ({Pool: class {
   on(_event: string, cb: (error: Error) => void) { state.onError=cb; }
   query = state.query;
 }}));
-import { saveObservation } from './browser-observation-writes';
+import { saveObservation, lookupTracking } from './browser-observation-writes';
 const observation={zpid:'123',captureId:'11111111-1111-4111-8111-111111111111',url:'https://www.zillow.com/homedetails/123_zpid/',observedAt:new Date().toISOString(),price:500000,status:'Active' as const};
 beforeEach(()=>{process.env.BROWSER_OBSERVATION_DATABASE_URL='postgres://unused';state.query.mockReset();});
 describe('observation function wrapper',()=>{
@@ -30,4 +30,11 @@ describe('observation function wrapper',()=>{
    expect(log).toHaveBeenCalledWith('[browser-observations] idle database connection error');
    expect(JSON.stringify(log.mock.calls)).not.toContain('secret');log.mockRestore();
  });
+});
+
+it('tracking delegates only to SELECT resolver and projects safe boolean',async()=>{
+ const body={action:'tracking-lookup' as const,scope:'apartment-range' as const,zpid:'53891611',url:'https://www.zillow.com/homedetails/53891611_zpid/',legacyUrl:'https://www.zillow.com/homes/1630-1632-NE-81st-Ave-Portland-OR-97213_rb/',identity:{}};
+ state.query.mockResolvedValue({rows:[{result:{tracked:true,propertyId:'private'}}]});
+ expect(await lookupTracking(body)).toEqual({tracked:true});expect(state.query).toHaveBeenCalledWith('SELECT public.lookup_browser_tracking($1::jsonb) AS result',[JSON.stringify(body)]);
+ state.query.mockResolvedValue({rows:[{result:{tracked:'yes'}}]});await expect(lookupTracking(body)).rejects.toThrow('unavailable');
 });

@@ -602,7 +602,56 @@ integration('real PostgreSQL observation transaction', () => {
       if(scenario==='direct'||scenario==='anchors') {expect(result.ok).toBe(true);expect((await admin.query('SELECT latest_status FROM property_current WHERE id=$1',[id])).rows[0].latest_status).toBe('Off market');}
       else {expect(result).toMatchObject({ok:false,reason:'not-tracked'});expect((await admin.query('SELECT count(*)::int n FROM browser_observation_field_history WHERE property_id=ANY($1::uuid[])',[[id,other]])).rows[0].n).toBe(0);}
     }finally{await new Promise<void>(r=>http.close(()=>r()));await admin.query('DELETE FROM browser_observation_field_history WHERE property_id=ANY($1::uuid[])',[[id,other]]);await admin.query('DELETE FROM property_records WHERE id=ANY($1::uuid[])',[[id,other]])}
-  });
+  },20000);
+  it.runIf(!!process.env.BROWSER_OBSERVATION_EXTENSION_REPO).each(['exact','unknown','ambiguous','stable-conflict','existing-zpid-conflict','mls-conflict','unknown-mls-conflict','parcel-conflict','unit','range-endpoint','house','unit-candidate'])('read-only apartment tracking through worker, HTTP and restricted SQL (%s)',async(scenario)=>{
+    const root=process.env.BROWSER_OBSERVATION_EXTENSION_REPO!,require=createRequire(import.meta.url),extractor=require(resolve(root,'extract.js'));
+    const f=require(resolve(root,'test/range-fixture.cjs'))({homeType:'APARTMENT'});let candidate:any;
+    expect(extractor.collect(f.document,f.url,f.style,()=>{},(c:any)=>candidate=c)).toBeNull();expect(candidate).toBeTruthy();
+    const id=randomUUID(),other=randomUUID();
+    await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address,track) VALUES($1::uuid,'range',($1::uuid)::text,$3),($2::uuid,'other',($2::uuid)::text,'plex')",[id,other,scenario==='house'?'house':'plex']);
+    let source=candidate.legacyUrl;
+    if(scenario==='unit') source=source.replace('-Portland','-Apt-1-Portland');
+    if(scenario==='range-endpoint') source=source.replace('1630-1632','1630-1633');
+    if(scenario!=='unknown') await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zillow_url',$2)",[id,source]);
+    if(scenario==='ambiguous') await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'listing_url',$2)",[other,source]);
+    if(scenario==='stable-conflict') await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zpid',$2)",[other,candidate.zpid]);
+    if(scenario==='existing-zpid-conflict') await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zpid','999111')",[id]);
+    if(scenario==='mls-conflict') {candidate.identity.mlsNumber='W338545';await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'mls','W338545')",[other]);}
+    if(scenario==='unknown-mls-conflict') {candidate.identity.mlsNumber='W338545';await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'mls','338545')",[id]);}
+    if(scenario==='parcel-conflict') {candidate.identity.parcelId='RTEST';await admin.query("UPDATE property_records SET parcel_id='ROTHER' WHERE id=$1",[id]);}
+    if(scenario==='unit-candidate') candidate.legacyUrl=candidate.legacyUrl.replace('-Portland','-Unit-1-Portland');
+    await admin.query("INSERT INTO property_collections(property_id,collection,track) VALUES($1,'watchlist','plex')",[id]);
+    await admin.query("INSERT INTO property_funnel_ranks(property_id,rank_key) VALUES($1,'zzzy')",[id]);
+    await admin.query("INSERT INTO property_listing_events(property_id,event_type,event_date,status,source) VALUES($1,'sold',current_date,'Sold','fixture')",[id]);
+    const snapshot=async()=>{
+      const out:Record<string,unknown>={};for(const table of ['property_records','property_identifiers','property_collections','property_funnel_ranks','property_listing_events','browser_observation_history','browser_observation_field_history','browser_watchlist_intake_ledger'])out[table]=(await admin.query(`SELECT row_to_json(t) r FROM ${table} t ORDER BY row_to_json(t)::text`)).rows;return out;
+    };
+    const before=await snapshot();
+    process.env.BROWSER_OBSERVATION_EXTENSION_ID='abcdefghijklmnopabcdefghijklmnop';process.env.BROWSER_OBSERVATION_TOKEN='test-token';
+    let requests=0,lost=true;const bodies:string[]=[];
+    const http=createHttpServer(async(req,res)=>{requests++;const chunks=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));const response=await POST(new Request('https://dashboard.test/api/browser-observations',{method:'POST',headers:req.headers as Record<string,string>,body:Buffer.concat(chunks)}));res.writeHead(response.status,{'content-type':'application/json'});res.end(await response.text())});
+    await new Promise<void>(r=>http.listen(0,'127.0.0.1',r));const port=(http.address() as {port:number}).port;let listener:any;
+    const chrome={runtime:{id:'extension',onMessage:{addListener:(f:any)=>listener=f}},storage:{local:{setAccessLevel:async()=>{},get:async()=>({origin:'https://dashboard.test',token:'test-token'})}},tabs:{get:async()=>({url:f.url})},permissions:{contains:async()=>true}};
+    runInNewContext(readFileSync(resolve(root,'worker.js'),'utf8'),{chrome,URL,AbortSignal,TextEncoder,importScripts:()=>{},ZillowExtract:extractor,fetch:async(_:string,init:RequestInit)=>{bodies.push(init.body as string);const r=await fetch(`http://127.0.0.1:${port}/api/browser-observations`,{...init,headers:{...init.headers,Origin:'chrome-extension://abcdefghijklmnopabcdefghijklmnop'}});if(lost){lost=false;throw Error('lost response')}return r;}});
+    const writer=new Pool({connectionString:process.env.BROWSER_OBSERVATION_DATABASE_URL});
+    try {
+      const result=await new Promise<any>(r=>listener({type:'tracking-lookup',candidate},{id:'extension',frameId:0,tab:{id:1,url:f.url},url:f.url},r));
+      if(scenario==='unit-candidate'){expect(result.ok).toBe(false);expect(requests).toBe(0);await expect(writer.query('SELECT public.lookup_browser_tracking($1::jsonb)',[JSON.stringify(candidate)])).rejects.toThrow();}
+      else {
+        expect(result).toEqual({ok:true,tracked:scenario==='exact'});expect(requests).toBe(2);expect(bodies[0]).toBe(bodies[1]);
+        const client=await writer.connect();try{await client.query('BEGIN READ ONLY');expect((await client.query('SELECT public.lookup_browser_tracking($1::jsonb) result',[JSON.stringify(candidate)])).rows[0].result).toEqual({tracked:scenario==='exact'});await client.query('ROLLBACK');}finally{client.release()}
+        await expect(writer.query('SELECT public.resolve_browser_tracking_identity($1::jsonb)',[JSON.stringify(candidate)])).rejects.toThrow();
+      }
+      if(scenario==='exact') for(const patch of [{scope:'whole'},{action:'observe'},{identity:{mlsNumber:null}},{identity:{extra:'x'}},{fields:{finished_sqft:813}},{legacyUrl:null},{zpid:null}]) {
+        await expect(writer.query('SELECT public.lookup_browser_tracking($1::jsonb)',[JSON.stringify({...candidate,...patch})])).rejects.toThrow();
+      }
+      if(scenario==='exact' && process.env.BROWSER_RANGE_CHROMIUM_TEST==='1') {
+        await new Promise<void>((resolve,reject)=>{const child=spawn(process.execPath,['test/range-chromium-harness.cjs',`http://127.0.0.1:${port}/api/browser-observations`],{cwd:root,env:process.env});let output='';child.stdout.on('data',x=>output+=x);child.stderr.on('data',x=>output+=x);child.on('error',reject);child.on('close',code=>code===0?resolve():reject(new Error(output)));});
+      }
+      expect(await snapshot()).toEqual(before);
+      expect((await admin.query("SELECT * FROM property_identifiers WHERE kind='zpid' AND value=$1 AND property_id=$2",[candidate.zpid,id])).rows).toEqual([]);
+    } finally {await writer.end();await new Promise<void>(r=>http.close(()=>r()));await admin.query('DELETE FROM property_records WHERE id=ANY($1::uuid[])',[[id,other]])}
+  },20000);
   it.runIf(!!process.env.BROWSER_OBSERVATION_EXTENSION_REPO).each(['exact','unknown','ambiguous','stable-conflict','listing-conflict','unit','range-endpoint','single-endpoint','duplicate-305'])('range collector → builder → worker → authenticated handler → restricted SQL (%s)',async(scenario)=>{
     const root=process.env.BROWSER_OBSERVATION_EXTENSION_REPO!,require=createRequire(import.meta.url);
     const extractor=require(resolve(root,'extract.js')),builder=require(resolve(root,'capture-requests.js'));

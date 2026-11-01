@@ -1,5 +1,5 @@
-import { parseObservation, parseIntake, validToken } from '../../../lib/browser-observations';
-import { saveObservation, saveIntake } from '../../../lib/browser-observation-writes';
+import { parseObservation, parseIntake, parseTrackingLookup, validToken } from '../../../lib/browser-observations';
+import { saveObservation, saveIntake, lookupTracking } from '../../../lib/browser-observation-writes';
 export const dynamic = 'force-dynamic';
 const headers = { 'Cache-Control': 'no-store', 'Vary': 'Origin' };
 function origin(request: Request) {
@@ -22,6 +22,10 @@ export async function POST(request: Request) {
     while (true) { const {done,value} = await reader.read(); if (done) break; size += value.length; if (size > 256000) { await reader.cancel(); throw Error(); } chunks.push(value); }
     const bytes = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { bytes.set(chunk,offset); offset += chunk.length; }
     const raw = JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+    if (raw?.action === 'tracking-lookup') {
+      const candidate = parseTrackingLookup(raw); if (!candidate) throw Error();
+      try { return Response.json(await lookupTracking(candidate),{headers:h}); } catch { return Response.json({error:'unavailable'},{status:503,headers:h}); }
+    }
     const intake = raw?.action === 'watchlist-intake';
     const parsed = intake ? parseIntake(raw) : parseObservation(raw);
     if (!parsed) throw Error();
