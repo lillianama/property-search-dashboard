@@ -13,7 +13,7 @@ export function parseObservation(value: unknown, now = Date.now()): Observation 
   if (typeof o.zpid !== 'string' || !/^[1-9]\d{0,19}$/.test(o.zpid) || typeof o.url !== 'string' || o.url !== `https://www.zillow.com/homedetails/${o.zpid}_zpid/`) return null;
   if (typeof o.captureId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(o.captureId)) return null;
   if (typeof o.observedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(o.observedAt)) return null;
-  const t = Date.parse(o.observedAt); if (!Number.isFinite(t) || t > now + 300000 || t < now - 86400000) return null;
+  const t = Date.parse(o.observedAt); if (!Number.isFinite(t) || new Date(t).toISOString() !== o.observedAt || t > now + 300000 || t < now - 86400000) return null;
   if (o.price !== undefined && (!Number.isSafeInteger(o.price) || (o.price as number) < 1 || (o.price as number) > 1000000000)) return null;
   if (o.status !== undefined && !['Active','Pending'].includes(o.status as string)) return null;
   if (o.price === undefined || o.status === undefined) return null;
