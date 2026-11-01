@@ -1,10 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, type Server, type Socket } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { Pool } from 'pg';
 import { readFileSync } from 'node:fs';
 import { saveObservation, closeBrowserObservationPool } from './browser-observation-writes';
 import type { Observation } from './browser-observations';
+import { fetchActualTaxRows } from './queries';
+import { selectActualAnnualTaxes } from './tax';
+import { POST } from '../app/api/browser-observations/route';
+import { GET as dashboardGET } from '../app/api/dashboard/route';
+import { NextRequest } from 'next/server';
+import { randomUUID } from 'node:crypto';
 
 // Explicit opt-in: this bridge targets only the dedicated disposable test container.
 const integration = process.env.BROWSER_OBSERVATION_PG_TEST === '1' ? describe : describe.skip;
@@ -22,6 +29,7 @@ integration('real PostgreSQL observation transaction', () => {
     await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
     const port=(server.address() as {port:number}).port;
     const url=`postgresql://postgres@127.0.0.1:${port}/postgres`;
+    process.env.DATABASE_URL=url;
     admin = new Pool({connectionString:url});
     process.env.BROWSER_OBSERVATION_DATABASE_URL=`postgresql://browser_observation_writer@127.0.0.1:${port}/postgres`;
     await admin.query(readFileSync(new URL('../../scripts/property-store-schema.sql', import.meta.url),'utf8'));
@@ -122,13 +130,108 @@ integration('real PostgreSQL observation transaction', () => {
       finally { await unprivileged.end(); }
     } finally { await restricted.end(); }
   });
+  it('validates v2 at SQL boundary, respects source precedence and preserves multiple photos', async()=>{
+    const id='44444444-4444-4444-8444-444444444444';
+    await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address,track) VALUES ($1,'v2','v2','house')",[id]);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES ($1,'zpid','987')",[id]);
+    const base2={zpid:'987',url:'https://www.zillow.com/homedetails/987_zpid/',observedAt:new Date(Date.now()-1000).toISOString(),captureId:'12345678-1111-4111-8111-111111111111',field:'bedrooms',value:3};
+    const a=await saveObservation(base2); expect(a.changedFields).toEqual(['bedrooms']);
+    expect(await saveObservation(base2)).toEqual(a);
+    await expect(saveObservation({...base2,value:4})).rejects.toThrow('capture conflict');
+    await admin.query("INSERT INTO property_observations(property_id,field,value,source,observed_at,confidence) VALUES ($1,'bedrooms','4','rmls',now()-interval '10 seconds',0.9)",[id]);
+    const high={...base2,captureId:'12345678-2222-4222-8222-222222222222',value:5};
+    expect((await saveObservation(high)).changedFields).toEqual([]);
+    const p1={...base2,field:'photo_url',value:'https://photos.zillowstatic.com/fp/a.jpg',captureId:'12345678-3333-4333-8333-333333333333'};
+    const p2={...p1,value:'https://photos.zillowstatic.com/fp/b.jpg',captureId:'12345678-4444-4444-8444-444444444444'};
+    expect((await saveObservation(p1)).changedFields).toEqual(['photo_url']);
+    expect((await saveObservation(p2)).changedFields).toEqual(['photo_url']);
+    expect((await admin.query("SELECT raw->>'photoUrl' AS photo FROM property_observations WHERE property_id=$1 AND field='photo_url' ORDER BY photo",[id])).rows).toEqual([{photo:p1.value},{photo:p2.value}]);
+    const sold={...base2,captureId:'12345678-5555-4555-8555-555555555555',field:'listing',value:{status:'Sold'}};
+    expect((await saveObservation(sold)).changedFields).toEqual(['status']);
+    expect((await admin.query("SELECT price,status FROM property_listing_events WHERE property_id=$1",[id])).rows).toEqual([{price:null,status:'Sold'}]);
+    for (const bad of [{field:'annual_property_tax',value:0},{field:'listing',value:{status:'Sold',price:1}},{field:'photo_url',value:'https://evil.test/a.jpg'},{field:'owner',value:'private'},{field:'annual_property_tax_year',value:1800}]) {
+      await expect(saveObservation({...base2,captureId:'12345678-6666-4666-8666-666666666666',...bad})).rejects.toThrow();
+    }
+    const t={...base2,field:'tax_history',value:{taxPaid:2200,year:2024,assessedValue:300000},captureId:'22345678-1111-4111-8111-111111111111'};
+    expect((await saveObservation(t)).changedFields).toEqual(['tax_history']);
+    const olderTax={...t,value:{taxPaid:9000,year:2023},captureId:'22345678-9999-4999-8999-999999999999'};
+    expect((await saveObservation(olderTax)).changedFields).toEqual(['tax_history']);
+    const selected=selectActualAnnualTaxes(await fetchActualTaxRows([id])).get(id);
+    expect(selected?.amount).toBe(2200);expect(selected?.taxYear).toBe(2024);
+    expect((await admin.query("SELECT raw->'propertyTaxes' AS taxes FROM property_observations WHERE property_id=$1 AND field='annual_property_tax'",[id])).rows[0].taxes).toEqual({'2024':{year:2024,total:2200}});
+    const room={...base2,field:'published_room',value:{roomType:'bedroom',roomLabel:'Bedroom 2',widthFt:9,lengthFt:10,areaSqft:90},captureId:'22345678-2222-4222-8222-222222222222'};
+    expect((await saveObservation(room)).changedFields).toEqual(['published_room']);
+    const dimensionOnly={...room,captureId:'22345678-aaaa-4aaa-8aaa-aaaaaaaaaaaa',value:{roomType:'bedroom',roomLabel:'Bedroom 3',widthFt:8,lengthFt:11}};
+    expect((await saveObservation(dimensionOnly)).changedFields).toEqual(['published_room']);
+    expect(Number((await admin.query("SELECT area_sqft FROM property_rooms WHERE property_id=$1 AND room_label='Bedroom 3'",[id])).rows[0].area_sqft)).toBe(88);
+    expect((await admin.query('SELECT width_ft::numeric,length_ft::numeric,area_sqft::numeric FROM property_rooms WHERE property_id=$1',[id])).rows).toHaveLength(2);
+    const history={...base2,field:'listing_history',value:{date:'2020-01-01',event:'Listed for rent',kind:'rental',price:2000},captureId:'22345678-3333-4333-8333-333333333333'};
+    expect((await saveObservation(history)).changedFields).toEqual(['listing_history']);
+    for (const value of [{...history.value,event:'arbitrary'}, {...history.value,kind:'sale'}, {...history.value,source:'Private contact'}, {...history.value,mlsNumber:'bad#'}]) await expect(saveObservation({...history,captureId:randomUUID(),value})).rejects.toThrow();
+    expect((await admin.query("SELECT price,status FROM property_listing_events WHERE property_id=$1 AND event_type='browser_rental_history'",[id])).rows).toEqual([{price:null,status:null}]);
+    const description={...base2,field:'description',value:'long public description '.repeat(1500),captureId:'22345678-5555-4555-8555-555555555555'};
+    expect((await saveObservation(description)).changedFields).toEqual(['description']);
+    expect((await saveObservation(description)).changedFields).toEqual(['description']);
+    const units={...base2,field:'unit_mix',value:[{bedrooms:2,bathrooms:1}],captureId:'22345678-7777-4777-8777-777777777777'};
+    expect((await saveObservation(units)).changedFields).toEqual(['unit_mix']);
+    expect((await admin.query("SELECT value,source FROM property_observations WHERE property_id=$1 AND field='unit_mix'",[id])).rows).toEqual([{value:units.value,source:'zillow-browser'}]);
+    for (const value of [[{bedrooms:2,privateName:'no'}],[{occupancy:'unknown'}],Array(21).fill({bedrooms:1})]) await expect(saveObservation({...units,captureId:randomUUID(),value})).rejects.toThrow();
+    const longArray={...base2,field:'heating',value:Array(30).fill('x'.repeat(200)),captureId:randomUUID()};
+    expect((await saveObservation(longArray)).changedFields).toEqual(['heating']);
+    expect((await admin.query("SELECT value FROM property_observations WHERE property_id=$1 AND field='heating'",[id])).rows[0].value).toEqual(longArray.value);
+    await expect(saveObservation({...longArray,captureId:randomUUID(),value:Array(31).fill('x')})).rejects.toThrow();
+    await expect(saveObservation({...description,captureId:randomUUID(),value:'x'.repeat(50001)})).rejects.toThrow();
+    const later={...base2,observedAt:new Date().toISOString(),field:'listing',value:{status:'Pending',price:600000},captureId:'32345678-1111-4111-8111-111111111111'};
+    await admin.query("INSERT INTO property_collections(property_id,collection,track) VALUES($1,'watchlist','house')",[id]);
+    await admin.query("INSERT INTO property_funnel_ranks(property_id,rank_key) VALUES($1,'a')",[id]);
+    process.env.BROWSER_OBSERVATION_EXTENSION_ID='abcdefghijklmnopabcdefghijklmnop';
+    process.env.BROWSER_OBSERVATION_TOKEN='test-token';
+    const submit=async (v:unknown)=>(await POST(new Request('https://dashboard.test/api/browser-observations',{method:'POST',headers:{origin:'chrome-extension://abcdefghijklmnopabcdefghijklmnop',authorization:'Bearer test-token','content-type':'application/json'},body:JSON.stringify(v)}))).json();
+    expect((await submit(later)).changedFields).toEqual(['price','status']);
+    const dashboard = async (view:string) => (await (await dashboardGET(new NextRequest(`https://dashboard.test/api/dashboard?track=house&lifecycle=${view}`))).json());
+    const pendingDashboard=await dashboard('pending');
+    expect(pendingDashboard.meta.dbAvailable).toBe(true);
+    expect(pendingDashboard.properties.find((p:{id:string})=>p.id===id)?.displayStatus).toBe('Pending');
+    expect((await dashboard('search')).properties.some((p:{id:string})=>p.id===id)).toBe(false);
+
+    await admin.query('SELECT pg_sleep(0.01)');
+    const active={...later,observedAt:new Date().toISOString(),value:{status:'Active',price:600000},captureId:'32345678-2222-4222-8222-222222222222'};
+    expect((await submit(active)).changedFields).toEqual(['status']);
+    const restored=(await dashboard('search')).properties.find((p:{id:string})=>p.id===id);
+    expect(restored).toMatchObject({displayStatus:'Active',funnelBucket:'watchlist',rankKey:'a'});
+    expect((await dashboard('pending')).properties.some((p:{id:string})=>p.id===id)).toBe(false);
+
+    const before=Number((await admin.query('SELECT count(*) AS n FROM property_listing_events WHERE property_id=$1',[id])).rows[0].n);
+    await admin.query('SELECT pg_sleep(0.01)');
+    expect((await saveObservation({...active,observedAt:new Date().toISOString(),captureId:'32345678-3333-4333-8333-333333333333'})).changedFields).toEqual([]);
+    expect(Number((await admin.query('SELECT count(*) AS n FROM property_listing_events WHERE property_id=$1',[id])).rows[0].n)).toBe(before);
+    expect((await admin.query('SELECT latest_status FROM property_current WHERE id=$1',[id])).rows[0].latest_status).toBe('Active');
+    expect((await admin.query('SELECT collection FROM property_collections WHERE property_id=$1',[id])).rows).toEqual([{collection:'watchlist'}]);
+    expect((await admin.query('SELECT rank_key FROM property_funnel_ranks WHERE property_id=$1',[id])).rows).toEqual([{rank_key:'a'}]);
+    await admin.query("INSERT INTO property_listing_events(property_id,event_type,price,status,source,observed_at) VALUES($1,'listing',700000,'Pending','rmls',now())",[id]);
+    await admin.query('SELECT pg_sleep(0.01)');
+    const conflicting={...active,observedAt:new Date().toISOString(),value:{status:'Active',price:500000},captureId:'32345678-4444-4444-8444-444444444444'};
+    expect((await saveObservation(conflicting)).changedFields).toEqual([]);
+    expect((await admin.query('SELECT latest_price,latest_status FROM property_current WHERE id=$1',[id])).rows[0]).toEqual({latest_price:700000,latest_status:'Pending'});
+    expect((await admin.query('SELECT payload FROM browser_observation_field_history WHERE capture_id=$1',[conflicting.captureId])).rows[0].payload).toEqual(conflicting);
+    await admin.query(readFileSync(new URL('../scripts/browser-observation-schema.sql', import.meta.url),'utf8'));
+    process.env.BROWSER_OBSERVATION_EXTENSION_ID='abcdefghijklmnopabcdefghijklmnop';
+    process.env.BROWSER_OBSERVATION_TOKEN='test-token';
+    const httpObserved=new Date().toISOString();
+    const req=(auth:string)=>new Request('https://dashboard.test/api/browser-observations',{method:'POST',headers:{origin:'chrome-extension://abcdefghijklmnopabcdefghijklmnop',authorization:auth,'content-type':'application/json'},body:JSON.stringify({...base2,observedAt:httpObserved,field:'annual_property_tax',value:2345,captureId:'12345678-7777-4777-8777-777777777777'})});
+    expect((await POST(req('Bearer wrong'))).status).toBe(401);
+    const response=await POST(req('Bearer test-token')); expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({matched:true,zpid:'987',changedFields:['annual_property_tax']});
+    expect((await (await POST(req('Bearer test-token'))).json()).changedFields).toEqual(['annual_property_tax']);
+    expect((await admin.query("SELECT value,source FROM property_observations WHERE property_id=$1 AND field='annual_property_tax' ORDER BY id DESC LIMIT 1",[id])).rows).toEqual([{value:2345,source:'zillow-browser'}]);
+  });
   it('rejects unknown and ambiguous identities without creating properties',async()=>{
     const unknown={...base,zpid:'456',url:'https://www.zillow.com/homedetails/456_zpid/'};
     expect((await saveObservation(unknown)).matched).toBe(false);
     await admin.query(`INSERT INTO property_records(id,canonical_address,normalized_address) VALUES ('22222222-2222-4222-8222-222222222222','other','other')`);
     await admin.query(`INSERT INTO property_identifiers(property_id,kind,value) VALUES ('22222222-2222-4222-8222-222222222222','zpid','123')`);
     expect((await saveObservation({...base,captureId:'ffffffff-ffff-4fff-8fff-ffffffffffff'})).matched).toBe(false);
-    expect(Number((await admin.query('SELECT count(*) AS n FROM property_records')).rows[0].n)).toBe(3);
+    expect(Number((await admin.query('SELECT count(*) AS n FROM property_records')).rows[0].n)).toBe(4);
     const restricted=new Pool({connectionString:process.env.BROWSER_OBSERVATION_DATABASE_URL});
     await expect(restricted.query(`UPDATE property_editor_notes SET value='changed'`)).rejects.toThrow();
     await expect(restricted.query(`INSERT INTO property_listing_events(property_id,event_type,price,status,source) VALUES ($1,'listing',1,'Active','forged')`,[property])).rejects.toThrow(/permission denied/);
@@ -140,4 +243,37 @@ integration('real PostgreSQL observation transaction', () => {
     expect((await admin.query("SELECT has_function_privilege('public','public.save_browser_observation(jsonb)','EXECUTE') AS allowed")).rows[0].allowed).toBe(false);
     await restricted.end();
   });
+  it.runIf(!!process.env.BROWSER_OFFLINE_HTML)('renders the private saved page through production worker and authenticated HTTP into PostgreSQL',async()=>{
+    const id='66666666-6666-4666-8666-666666666666';
+    await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address,track) VALUES($1,'offline fixture','offline fixture','house')",[id]);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zpid','53973028')",[id]);
+    process.env.BROWSER_OBSERVATION_EXTENSION_ID='abcdefghijklmnopabcdefghijklmnop'; process.env.BROWSER_OBSERVATION_TOKEN='test-token';
+    let requests=0, safeHeaders=true;
+    const http=createHttpServer(async(req,res)=>{try {
+      const chunks:Buffer[]=[]; for await(const chunk of req) chunks.push(Buffer.from(chunk)); const body=Buffer.concat(chunks);
+      safeHeaders &&= req.method==='POST' && req.url==='/api/browser-observations' && req.headers.origin==='chrome-extension://abcdefghijklmnopabcdefghijklmnop' && req.headers.authorization==='Bearer test-token' && body.length<=256000;
+      requests++;
+      const response=await POST(new Request('https://dashboard.test/api/browser-observations',{method:'POST',headers:{origin:String(req.headers.origin),authorization:String(req.headers.authorization),'content-type':String(req.headers['content-type'])},body}));
+      res.writeHead(response.status,{'content-type':'application/json'});res.end(await response.text());
+    } catch { res.writeHead(500);res.end('{}'); }});
+    await new Promise<void>(resolve=>http.listen(0,'127.0.0.1',resolve));
+    const port=(http.address() as {port:number}).port;
+    try {
+      const result=await new Promise<{code:number|null,stdout:string,stderr:string}>((resolve,reject)=>{
+        const child=spawn('node',['test/offline-render-harness.cjs',process.env.BROWSER_OFFLINE_HTML!,`http://127.0.0.1:${port}/api/browser-observations`,process.env.BROWSER_OFFLINE_SCREENSHOTS || '/tmp'],{cwd:'/home/node/.openclaw/workspace/property-search-browser-extension',stdio:['ignore','pipe','pipe']});
+        let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);child.on('error',reject);child.on('close',code=>resolve({code,stdout,stderr}));
+      });
+      expect(result.code, result.stderr).toBe(0);const summary=JSON.parse(result.stdout);expect(summary).toMatchObject({partialFailed:true,finalSaved:true});expect(summary.unique).toBeGreaterThan(30);expect(safeHeaders).toBe(true);expect(requests).toBeGreaterThan(summary.unique);
+      expect((await admin.query('SELECT count(*)::int AS n FROM browser_observation_field_history WHERE property_id=$1',[id])).rows[0].n).toBe(summary.unique);
+      const facts=await admin.query("SELECT field,value FROM property_observations WHERE property_id=$1 AND field IN ('parcel_id','basement','published_annual_tax_amount','description','photo_url','annual_property_tax')",[id]);
+      expect(facts.rows.find(x=>x.field==='parcel_id')?.value).toBe('R291279');expect(facts.rows.find(x=>x.field==='basement')?.value).toBe('Finished');
+      expect(facts.rows.find(x=>x.field==='published_annual_tax_amount')?.value).toBe(8473);expect(facts.rows.some(x=>x.field==='description' && typeof x.value==='string' && x.value.length>20)).toBe(true);expect(facts.rows.filter(x=>x.field==='photo_url').length).toBeGreaterThan(1);
+      const tax=await admin.query("SELECT raw->'propertyTaxes' AS taxes FROM property_observations WHERE property_id=$1 AND field='annual_property_tax'",[id]);expect(tax.rows.some(x=>x.taxes?.['2025']?.total===8474)).toBe(true);
+      const rental=await admin.query("SELECT price,status,raw FROM property_listing_events WHERE property_id=$1 AND event_type='browser_rental_history' AND raw->>'event'='Listed for rent'",[id]);expect(rental.rows).toHaveLength(1);expect(rental.rows[0]).toMatchObject({price:null,status:null,raw:{kind:'rental',price:2200}});
+      const ledger=await admin.query('SELECT payload FROM browser_observation_field_history WHERE property_id=$1',[id]);
+      expect(ledger.rows.every(({payload})=>Object.keys(payload).sort().join(',')==='captureId,field,observedAt,url,value,zpid')).toBe(true);
+      expect(ledger.rows.some(({payload})=>/mortgage|agentEmail|adTargets/i.test(JSON.stringify(payload)))).toBe(false);
+    } finally {await new Promise<void>(resolve=>http.close(()=>resolve()))}
+  },120000);
+
 });

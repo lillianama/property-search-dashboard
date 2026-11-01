@@ -43,6 +43,7 @@ const SOLD_STATUSES = new Set(["sold", "closed"]);
 const INACTIVE_STATUSES = new Set([
   "inactive",
   "off market",
+  "for rent",
   "off the market",
   "withdrawn",
   "expired",

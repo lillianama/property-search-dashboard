@@ -33,19 +33,19 @@ const HOUSE_BASE_CTE = `
     pc.city AS city,
     pc.state AS state,
     pc.zip_code AS zip_code,
-    pc.latitude AS latitude,
-    pc.longitude AS longitude,
+    COALESCE(pc.latitude, (SELECT (o.value #>> '{}')::double precision FROM property_observations o WHERE o.property_id=pc.id AND o.field='latitude' AND jsonb_typeof(o.value)='number' AND (o.value #>> '{}')::numeric BETWEEN -90 AND 90 ORDER BY o.confidence DESC,o.observed_at DESC LIMIT 1)) AS latitude,
+    COALESCE(pc.longitude, (SELECT (o.value #>> '{}')::double precision FROM property_observations o WHERE o.property_id=pc.id AND o.field='longitude' AND jsonb_typeof(o.value)='number' AND (o.value #>> '{}')::numeric BETWEEN -180 AND 180 ORDER BY o.confidence DESC,o.observed_at DESC LIMIT 1)) AS longitude,
     ${safeNumeric("pc.bedrooms")} AS bedrooms,
     ${safeNumeric("pc.bathrooms")} AS bathrooms,
     ${safeNumeric("pc.finished_sqft")} AS finished_sqft,
     ${safeNumeric("pc.year_built")} AS year_built,
-    pc.latest_price AS latest_price,
+    CASE WHEN lower(coalesce(pc.latest_status,'')) IN ('sold','closed','off market','off-market','for rent','inactive','withdrawn','expired','cancelled','canceled','delisted','removed') THEN NULL ELSE pc.latest_price END AS latest_price,
     pc.latest_status AS latest_status,
     pc.latest_sale_price AS latest_sale_price,
     pc.latest_sale_date AS latest_sale_date,
     pc.first_seen_at AS first_seen_at,
     pc.last_seen_at AS last_seen_at,
-    COALESCE(bf.bedroom_size_flag, 'unknown') AS bedroom_size_flag,
+    CASE WHEN bf.smallest_bedroom_sqft IS NULL THEN 'unknown' ELSE COALESCE(bf.bedroom_size_flag, 'unknown') END AS bedroom_size_flag,
     bf.smallest_bedroom_sqft AS smallest_bedroom_sqft,
     zu.value AS zillow_url
   FROM property_current pc
@@ -311,6 +311,10 @@ export async function fetchActualTaxRows(propertyIds: string[]): Promise<RawTaxS
         o.confidence AS confidence
       FROM property_observations o
       WHERE o.property_id = ANY($1::uuid[]) AND o.field = 'annual_property_tax'
+        -- A year-tagged browser observation is emitted by the by-year arm
+        -- below. Treating its scalar a second time as undated would assign
+        -- today's year to every historic tax bill and select the wrong bill.
+        AND NOT COALESCE(o.raw ? 'propertyTaxes', false)
       UNION ALL
       SELECT
         o.property_id::text,
