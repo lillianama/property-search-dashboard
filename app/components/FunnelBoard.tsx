@@ -417,10 +417,10 @@ export function FunnelBoard({
                     onEditNotes={() => onEditNotes(entry)}
                     onBottom={bucket === "watchlist" ? () => onWatchlistBottom(entry) : undefined}
                     bottomMoveBusy={bottomMoveBusy}
-                    onQuickMove={bucket === "watchlist" ? (target) => {
+                    onQuickMove={(target) => {
                       if (target === "top-contenders") setFireworksId((id) => (id ?? 0) + 1);
                       commitMove(entry, target, 0);
-                    } : undefined}
+                    }}
                   />
                 </li>
               ),
@@ -638,7 +638,7 @@ function FunnelRow({
   onDragEnd: () => void;
   onReject: () => void;
   onEditNotes: () => void;
-  onQuickMove?: (bucket: "to-tour" | "top-contenders") => void;
+  onQuickMove: (bucket: FunnelBucket) => void;
   onBottom?: () => void;
   bottomMoveBusy: boolean;
 }) {
@@ -718,16 +718,20 @@ function FunnelRow({
       </div>
 
       <div className="funnel-row-actions">
-        {onQuickMove && <>
+        {house.funnelBucket === "watchlist" && <>
           <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
             onClick={() => onQuickMove("to-tour")} aria-label={`Move ${house.address} to To tour`}>
             <QuickMoveIcon kind="tour" /> To tour
           </button>
-          <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
+        </>}
+        {house.funnelBucket !== "top-contenders" && <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
             onClick={() => onQuickMove("top-contenders")} aria-label={`Move ${house.address} to Top contenders`}>
             <QuickMoveIcon kind="contender" /> Top contender
-          </button>
-        </>}
+          </button>}
+        {house.funnelBucket !== "watchlist" && <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
+          onClick={() => onQuickMove("watchlist")} aria-label={`Move ${house.address} to Watchlist`}>
+          To Watchlist
+        </button>}
         {onBottom && <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
           onClick={onBottom} disabled={bottomMoveBusy} aria-label={`Move ${house.address} to bottom of Watchlist`}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
