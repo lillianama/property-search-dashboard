@@ -34,12 +34,15 @@ BEGIN
       THEN RAISE EXCEPTION 'invalid identity' USING ERRCODE='22023'; END IF;
   END IF;
   SELECT array_agg(DISTINCT i.property_id) INTO ids FROM public.property_identifiers i
-    WHERE (i.kind IN ('zpid','zillow_zpid') AND i.value=observation->>'zpid')
-      OR (i.kind='zillow_url' AND i.value ~ ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$'));
+    WHERE (lower(i.kind) IN ('zpid','zillow_zpid','zillow') AND i.value=observation->>'zpid')
+      OR (lower(i.kind) IN ('zillow_url','zillow','listing_url') AND i.value ~* ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$'));
   IF coalesce(cardinality(ids),0)>1 THEN RETURN NULL; END IF;
   IF evidence IS NOT NULL THEN
-    SELECT array_agg(DISTINCT property_id) INTO parcels FROM public.property_identifiers WHERE kind IN ('parcel','parcel_id') AND value=evidence->>'parcelId';
-    SELECT array_agg(DISTINCT property_id) INTO listings FROM public.property_identifiers WHERE kind IN ('mls','mls_number') AND value=evidence->>'mlsNumber';
+    SELECT array_agg(DISTINCT property_id) INTO parcels FROM (
+      SELECT property_id FROM public.property_identifiers WHERE lower(kind) IN ('parcel','parcel_id') AND value=evidence->>'parcelId'
+      UNION SELECT id FROM public.property_records WHERE parcel_id=evidence->>'parcelId'
+    ) p;
+    SELECT array_agg(DISTINCT property_id) INTO listings FROM public.property_identifiers WHERE lower(kind) IN ('mls','mls_number') AND value=evidence->>'mlsNumber';
     IF coalesce(cardinality(ids),0)=0 THEN
       IF coalesce(cardinality(parcels),0)<>1 OR coalesce(cardinality(listings),0)<>1 OR parcels[1]<>listings[1] THEN RETURN NULL; END IF;
       ids:=parcels; legacy:=true;
@@ -52,12 +55,18 @@ BEGIN
   PERFORM 1 FROM public.property_records WHERE id=tracked FOR UPDATE;
   -- Reject contradictory identifiers even when another alias selected the row.
   IF EXISTS (SELECT 1 FROM public.property_identifiers i WHERE i.property_id=tracked AND
-    ((i.kind IN ('zpid','zillow_zpid') AND i.value<>observation->>'zpid') OR
-     (i.kind='zillow_url' AND i.value ~ '^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?[1-9][0-9]*_zpid/?([?#].*)?$'
-       AND i.value !~ ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$')) OR
-     (evidence IS NOT NULL AND i.kind IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId') OR
-     (evidence IS NOT NULL AND i.kind IN ('mls','mls_number') AND i.value<>evidence->>'mlsNumber')))
+    (((lower(i.kind) IN ('zpid','zillow_zpid') OR (lower(i.kind)='zillow' AND i.value ~ '^[1-9][0-9]{0,19}$')) AND i.value<>observation->>'zpid') OR
+     (lower(i.kind) IN ('zillow_url','zillow','listing_url') AND i.value ~* '^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?[1-9][0-9]*_zpid/?([?#].*)?$'
+       AND i.value !~* ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$')) OR
+     (evidence IS NOT NULL AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId') OR
+     -- MLS identifies a listing, so historical MLS aliases may differ. Require
+     -- membership in the known set, rather than equality with every old listing.
+     (evidence IS NOT NULL AND lower(i.kind) IN ('mls','mls_number')
+       AND NOT EXISTS (SELECT 1 FROM public.property_identifiers m WHERE m.property_id=tracked
+         AND lower(m.kind) IN ('mls','mls_number') AND m.value=evidence->>'mlsNumber'))))
     THEN RETURN NULL; END IF;
+  IF evidence IS NOT NULL AND EXISTS (SELECT 1 FROM public.property_records p
+    WHERE p.id=tracked AND p.parcel_id IS NOT NULL AND p.parcel_id<>evidence->>'parcelId') THEN RETURN NULL; END IF;
   -- Unique(kind,value) and the zpid transaction lock prevent competing bindings.
   IF legacy THEN
     INSERT INTO public.property_identifiers(property_id,kind,value,source)

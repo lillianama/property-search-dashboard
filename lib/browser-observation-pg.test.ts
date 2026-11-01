@@ -94,6 +94,66 @@ integration('real PostgreSQL observation transaction', () => {
     await admin.query('DELETE FROM browser_observation_history WHERE property_id=ANY($1::uuid[])',[[id,other]]);
     await admin.query('DELETE FROM property_records WHERE id=ANY($1::uuid[])',[[id,other]]);
   });
+  it('matches 3158 through its stored detail URL with historical MLS aliases and the record parcel', async()=>{
+    const id=randomUUID(), other=randomUUID(), zpid='53874198';
+    await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address,parcel_id) VALUES($1,'3158 NE 78 Avenue, Portland, OR 97213','3158 NE 78 AVENUE','R173927'),($2,'unrelated','unrelated',NULL)",[id,other]);
+    const detail='https://www.zillow.com/homedetails/3158-NE-78th-Ave-Portland-OR-97213/53874198_zpid/';
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zillow_url',$2),($1,'mls','577269814'),($1,'mls_number','294356768')",[id,detail]);
+    await admin.query("INSERT INTO property_listing_events(property_id,event_type,price,status,source) VALUES($1,'listing',429999,'Active','fixture')",[id]);
+    const before=(await admin.query('SELECT * FROM property_identifiers WHERE property_id=$1 ORDER BY kind',[id])).rows;
+    const common={zpid,url:`https://www.zillow.com/homedetails/${zpid}_zpid/`,observedAt:new Date().toISOString()};
+    const unmatched={matched:false,changedFields:[]};
+    for (const identity of [undefined,{parcelId:'R173927',mlsNumber:'577269814'},{parcelId:'R173927',mlsNumber:'294356768'}]) {
+      for (const fields of [{price:429999,status:'Active' as const}, {field:'listing',value:{price:429999,status:'Active'}}]) {
+        const payload={...common,captureId:randomUUID(),...fields,...(identity?{identity}:{})};
+        expect(await saveObservation(payload)).toEqual({matched:true,zpid,changedFields:[]});
+      }
+    }
+    const payload={...common,captureId:randomUUID(),field:'listing',value:{price:429999,status:'Active'}};
+    for (const identity of [{parcelId:'WRONG',mlsNumber:'294356768'},{parcelId:'R173927',mlsNumber:'UNKNOWN'}]) expect(await saveObservation({...payload,captureId:randomUUID(),identity})).toEqual(unmatched);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'MLS','294356768')",[other]);
+    expect(await saveObservation({...payload,identity:{parcelId:'R173927',mlsNumber:'294356768'}})).toEqual(unmatched);
+    await admin.query("DELETE FROM property_identifiers WHERE property_id=$1",[other]);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'Listing_URL',$2)",[other,detail+'?alias=ambiguous']);
+    expect(await saveObservation(payload)).toEqual(unmatched);
+    await admin.query('DELETE FROM property_identifiers WHERE property_id=$1',[other]);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zillow','999998')",[id]);
+    expect(await saveObservation(payload)).toEqual(unmatched);
+    await admin.query("DELETE FROM property_identifiers WHERE property_id=$1 AND kind='zillow'",[id]);
+    expect((await admin.query('SELECT * FROM property_identifiers WHERE property_id=$1 ORDER BY kind',[id])).rows).toEqual(before);
+    expect((await admin.query('SELECT DISTINCT price,status FROM property_listing_events WHERE property_id=$1',[id])).rows).toEqual([{price:429999,status:'Active'}]);
+    await admin.query('DELETE FROM browser_observation_field_history WHERE property_id=$1',[id]);
+    await admin.query('DELETE FROM browser_observation_history WHERE property_id=$1',[id]);
+    await admin.query('DELETE FROM property_records WHERE id=ANY($1::uuid[])',[[id,other]]);
+  });
+  it('automatically matches legacy sources without relying on address spelling or manual identity repairs',async()=>{
+    const id=randomUUID(), zpid='53874199';
+    await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address,parcel_id) VALUES($1,'3158 NE 78 AVE','legacy numeric spelling','R-LEGACY')",[id]);
+    const payload={zpid,url:`https://www.zillow.com/homedetails/${zpid}_zpid/`,observedAt:new Date().toISOString(),field:'bedrooms',value:2};
+    // Exact zpid-bearing source URLs work with no parcel or MLS request evidence.
+    for (const kind of ['zillow_url','ZILLOW_URL','listing_url','zillow']) {
+      await admin.query('INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,$2,$3)',[id,kind,`https://WWW.ZILLOW.COM/homedetails/3158-NE-78th-Avenue/${zpid}_zpid/?source=stored#details`]);
+      expect((await saveObservation({...payload,captureId:randomUUID()})).matched).toBe(true);
+      await admin.query('DELETE FROM property_identifiers WHERE property_id=$1',[id]);
+    }
+    for (const kind of ['zpid','ZILLOW_ZPID','zillow']) {
+      await admin.query('INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,$2,$3)',[id,kind,zpid]);
+      expect((await saveObservation({...payload,captureId:randomUUID()})).matched).toBe(true);
+      await admin.query('DELETE FROM property_identifiers WHERE property_id=$1',[id]);
+    }
+    for (const url of [`https://www.zillow.com.evil.test/homedetails/${zpid}_zpid/`,`https://user@www.zillow.com/homedetails/${zpid}_zpid/`,`https://www.zillow.com/homedetails/${zpid}0_zpid/`,`https://www.zillow.com/homes/3158-NE-78TH-AVE_rb/`]) {
+      await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zillow_url',$2)",[id,url]);
+      expect(await saveObservation({...payload,captureId:randomUUID()})).toEqual({matched:false,changedFields:[]});
+      await admin.query('DELETE FROM property_identifiers WHERE property_id=$1',[id]);
+    }
+    // An address-only URL cannot identify a zpid. Two independent exact stored
+    // anchors can bind it automatically, including the schema's record parcel.
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zillow_url','https://www.zillow.com/homes/3158-NE-78TH-AVE_rb/'),($1,'MLS','M-LEGACY')",[id]);
+    expect(await saveObservation({...payload,captureId:randomUUID(),identity:{parcelId:'R-LEGACY',mlsNumber:'M-LEGACY'}})).toMatchObject({matched:true,zpid});
+    expect((await admin.query("SELECT property_id FROM property_identifiers WHERE kind='zpid' AND value=$1",[zpid])).rows).toEqual([{property_id:id}]);
+    await admin.query('DELETE FROM browser_observation_field_history WHERE property_id=$1',[id]);
+    await admin.query('DELETE FROM property_records WHERE id=$1',[id]);
+  });
   it('projects current facts; retries, concurrent writes, stale evidence and rollback preserve invariants',async()=>{
     const a = await saveObservation(base);
     expect(a).toEqual({matched:true,zpid:'123',changedFields:['price','status']});
@@ -286,14 +346,19 @@ integration('real PostgreSQL observation transaction', () => {
     expect((await admin.query("SELECT has_function_privilege('public','public.save_browser_observation(jsonb)','EXECUTE') AS allowed")).rows[0].allowed).toBe(false);
     await restricted.end();
   });
-  it.runIf(!!process.env.BROWSER_OBSERVATION_EXTENSION_REPO)('sends the actual extension builder and worker payload through HTTP into the restricted SQL writer for a legacy record',async()=>{
+  it.runIf(!!process.env.BROWSER_OBSERVATION_EXTENSION_REPO).each(['legacy','3158'])('sends actual extension builder and worker payload through HTTP into restricted SQL for %s',async(scenario)=>{
     const root=process.env.BROWSER_OBSERVATION_EXTENSION_REPO!;
     const require=createRequire(import.meta.url);
     const builder=require(resolve(root,'capture-requests.js'));
     const extractor=require(resolve(root,'extract.js'));
-    const id=randomUUID(),zpid='53976377',url=`https://www.zillow.com/homedetails/${zpid}_zpid/`;
+    const id=randomUUID(),zpid=scenario==='legacy'?'53976377':'53874198',url=`https://www.zillow.com/homedetails/${zpid}_zpid/`;
     await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address) VALUES($1,'worker legacy','worker legacy')",[id]);
     await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'parcel','R295041'),($1,'mls','262014608'),($1,'zillow_url','https://www.zillow.com/homes/5218-NE-18TH-AVE-Portland-OR_rb/')",[id]);
+    if (scenario==='3158') {
+      await admin.query('DELETE FROM property_identifiers WHERE property_id=$1',[id]);
+      await admin.query("UPDATE property_records SET canonical_address='3158 NE 78 AVE',parcel_id='R173927' WHERE id=$1",[id]);
+      await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zillow_url','https://www.zillow.com/homedetails/3158-NE-78th-Ave-Portland-OR-97213/53874198_zpid/'),($1,'mls','577269814'),($1,'mls_number','294356768')",[id]);
+    }
     process.env.BROWSER_OBSERVATION_EXTENSION_ID='abcdefghijklmnopabcdefghijklmnop';process.env.BROWSER_OBSERVATION_TOKEN='test-token';
     let requests=0;
     const http=createHttpServer(async(req,res)=>{
@@ -307,13 +372,13 @@ integration('real PostgreSQL observation transaction', () => {
     const chrome={runtime:{id:'extension',onMessage:{addListener:(f:typeof listener)=>listener=f}},storage:{local:{setAccessLevel:async()=>{},get:async()=>({origin:'https://dashboard.test',token:'test-token'})}},tabs:{get:async()=>({url})},permissions:{contains:async()=>true}};
     runInNewContext(readFileSync(resolve(root,'worker.js'),'utf8'),{chrome,URL,AbortSignal,TextEncoder,importScripts:()=>{},ZillowExtract:extractor,fetch:async(_url:string,init:RequestInit)=>fetch(`http://127.0.0.1:${port}/api/browser-observations`,{...init,headers:{...init.headers,Origin:'chrome-extension://abcdefghijklmnopabcdefghijklmnop'}})});
     try {
-      const observation={zpid,url,observedAt:new Date().toISOString(),status:'Active',price:399000,fields:{parcel_id:'R295041',mls_number:'262014608',bedrooms:2}};
+      const observation={zpid,url,observedAt:new Date().toISOString(),status:'Active',price:399000,fields:{parcel_id:scenario==='legacy'?'R295041':'R173927',mls_number:scenario==='legacy'?'262014608':'294356768',bedrooms:2}};
       const captures=builder.build(observation,randomUUID);
       const sender={id:'extension',frameId:0,tab:{id:1,url},url};
       const send=()=>new Promise<any>(r=>listener({type:'observe',observation:{...observation,captures}},sender,r));
       const result=await send();expect(result.ok).toBe(true);expect(requests).toBe(captures.length);
       expect((await send()).changedFields).toEqual(result.changedFields);
-      expect((await admin.query("SELECT property_id FROM property_identifiers WHERE kind='zpid' AND value=$1",[zpid])).rows).toEqual([{property_id:id}]);
+      expect((await admin.query("SELECT public.resolve_browser_observation_identity($1) AS property_id",[JSON.stringify({zpid})])).rows).toEqual([{property_id:id}]);
       expect((await admin.query('SELECT count(*)::int n FROM browser_observation_field_history WHERE property_id=$1',[id])).rows[0].n).toBe(captures.length);
       expect(JSON.stringify(result)).not.toContain('test-token');
     } finally {
