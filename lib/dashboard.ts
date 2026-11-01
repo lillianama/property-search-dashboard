@@ -217,7 +217,7 @@ export async function buildDashboardResponse(filters: HouseFilters, track: Prope
   try {
     const [neighborhoodRows, zhviPoints] = await Promise.all([
       fetchNeighborhoodObservationRows(houses.map((h) => h.id)),
-      track === "house" ? fetchNeighborhoodZhviPoints() : Promise.resolve([]),
+      fetchNeighborhoodZhviPoints(),
     ]);
     const assessorByProperty = selectAssessorNeighborhoods(neighborhoodRows);
     const marketByProperty = joinNeighborhoodMarket(assessorByProperty, buildNeighborhoodRows(zhviPoints));

@@ -555,11 +555,10 @@ function PitiEstimate({ house, assumptions }: { house: HouseRecord; assumptions:
  * value and exact-year-ago YoY percentage — the same numbers as the Market
  * tab's table). Unknown/unmatched states are said plainly, never guessed. */
 function NeighborhoodLine({ house }: { house: HouseRecord }) {
-  const track = useTrack();
   if (!house.neighborhood) {
     return <span className="funnel-row-neighborhood funnel-row-neighborhood-unknown">Neighborhood unknown</span>;
   }
-  const market = track === "house" ? house.neighborhoodMarket : null;
+  const market = house.neighborhoodMarket;
   return (
     <span className="funnel-row-neighborhood">
       <span
@@ -573,7 +572,7 @@ function NeighborhoodLine({ house }: { house: HouseRecord }) {
           className="funnel-row-neighborhood-market"
           title={`Zillow Research SFR ZHVI for ${market.regionName}: typical mid-tier single-family value, as of ${market.latestMonth} — same figures as the Portland Market tab`}
         >
-          {" \u00b7 "}neighborhood median {formatCurrency(market.latestValue)}
+          {" \u00b7 "}SFR neighborhood median {formatCurrency(market.latestValue)}
           {" \u00b7 "}
           {market.yearChangePct === null ? (
             <>1-yr change unknown</>
@@ -585,9 +584,7 @@ function NeighborhoodLine({ house }: { house: HouseRecord }) {
           )}
         </span>
       ) : (
-        <span className="funnel-row-neighborhood-market">
-          {"\u00b7"}{track === "plex" ? " SFR ZHVI not shown for plexes" : " no Zillow ZHVI match"}
-        </span>
+        <span className="funnel-row-neighborhood-market">{"\u00b7"} no Zillow ZHVI match</span>
       )}
     </span>
   );
