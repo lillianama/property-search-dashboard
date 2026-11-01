@@ -77,3 +77,19 @@ export function parseObservation(value: unknown, now = Date.now()): Observation 
   if (o.price !== undefined && o.status !== 'Active' && o.status !== 'Pending') return null;
   return o as LegacyObservation;
 }
+
+export type BrowserIntake = { action:'watchlist-intake'; zpid:string; url:string; legacyUrl:string; captureId:string; observedAt:string; track:'house'|'plex'; identity:{mlsNumber?:string;parcelId?:string}; listing:{status:string;price?:number} };
+export function parseIntake(value: unknown, now = Date.now()): BrowserIntake | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const o = value as Record<string, unknown>;
+  if (Object.keys(o).sort().join(',') !== 'action,captureId,identity,legacyUrl,listing,observedAt,track,url,zpid' || o.action !== 'watchlist-intake' || !['house','plex'].includes(o.track as string)) return null;
+  const identity=o.identity as Record<string,unknown> | null;
+  if (!identity || typeof identity!=='object' || Array.isArray(identity) || Object.keys(identity).some(k=>!['mlsNumber','parcelId'].includes(k) || typeof identity[k]!=='string' || !/^[A-Za-z0-9-]{1,40}$/.test(identity[k] as string))) return null;
+  if (!validField('listing',o.listing)) return null;
+  if (typeof o.zpid !== 'string' || !/^[1-9]\d{0,19}$/.test(o.zpid) || o.url !== `https://www.zillow.com/homedetails/${o.zpid}_zpid/`) return null;
+  if (typeof o.legacyUrl !== 'string' || !/^https:\/\/www\.zillow\.com\/homes\/[0-9][A-Za-z0-9-]{4,200}-Portland-OR-97[0-9]{3}_rb\/$/i.test(o.legacyUrl)) return null;
+  if (typeof o.captureId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(o.captureId)) return null;
+  if (typeof o.observedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(o.observedAt)) return null;
+  const t=Date.parse(o.observedAt); if (!Number.isFinite(t) || new Date(t).toISOString()!==o.observedAt || t>now+300000 || t<now-86400000) return null;
+  return o as BrowserIntake;
+}

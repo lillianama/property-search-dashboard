@@ -15,6 +15,16 @@ CREATE TABLE IF NOT EXISTS public.browser_observation_history (
   UNIQUE (zpid, capture_id)
 );
 
+-- Normalize only Zillow's legacy address separators; preserve every address token.
+CREATE OR REPLACE FUNCTION public.browser_legacy_alias_key(url text)
+RETURNS text LANGUAGE sql IMMUTABLE STRICT SET search_path = pg_catalog AS $$
+  SELECT CASE WHEN url ~* '^https://www\.zillow\.com/homes/[a-z0-9,% -]+_rb/$'
+    AND url !~* '%(?!20|2c)' THEN
+    regexp_replace(replace(replace(replace(lower(url), '%20', '-'), '%2c', '-'), ',', '-'), '[- ]+', '-', 'g')
+  ELSE NULL END
+$$;
+REVOKE ALL ON FUNCTION public.browser_legacy_alias_key(text) FROM PUBLIC;
+
 -- Resolve exact identifiers only. No address guesses, intake, or record merges.
 -- Legacy source URLs must match exactly (case-insensitive, optional stored ZIP).
 -- Parcel/MLS evidence remains independently checked when supplied.
@@ -44,7 +54,7 @@ BEGIN
     -- ZIP in a stored alias is allowed; a different published ZIP is not.
     SELECT array_agg(DISTINCT property_id) INTO sources FROM public.property_identifiers
       WHERE lower(kind) IN ('zillow_url','zillow','listing_url')
-      AND lower(value) IN (lower(evidence->>'legacyUrl'),lower(regexp_replace(evidence->>'legacyUrl','-[0-9]{5}_rb/$', '_rb/')));
+      AND public.browser_legacy_alias_key(value) IN (public.browser_legacy_alias_key(evidence->>'legacyUrl'),public.browser_legacy_alias_key(regexp_replace(evidence->>'legacyUrl','-[0-9]{5}_rb/$', '_rb/')));
     IF coalesce(cardinality(sources),0)>1 THEN RETURN NULL; END IF;
     IF coalesce(cardinality(ids),0)=0 AND coalesce(cardinality(sources),0)=1 THEN
       ids:=sources; legacy:=true;
@@ -71,19 +81,14 @@ BEGIN
     (((lower(i.kind) IN ('zpid','zillow_zpid') OR (lower(i.kind)='zillow' AND i.value ~ '^[1-9][0-9]{0,19}$')) AND i.value<>observation->>'zpid') OR
      (lower(i.kind) IN ('zillow_url','zillow','listing_url') AND i.value ~* '^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?[1-9][0-9]*_zpid/?([?#].*)?$'
        AND i.value !~* ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (observation->>'zpid') || '_zpid/?([?#].*)?$')) OR
-     (evidence ? 'parcelId' AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId') OR
-     -- MLS identifies a listing, so historical MLS aliases may differ. Require
-     -- membership in the known set, rather than equality with every old listing.
-     (evidence ? 'mlsNumber' AND lower(i.kind) IN ('mls','mls_number')
-       AND NOT EXISTS (SELECT 1 FROM public.property_identifiers m WHERE m.property_id=tracked
-         AND lower(m.kind) IN ('mls','mls_number') AND m.value=evidence->>'mlsNumber'))))
+     (evidence ? 'parcelId' AND lower(i.kind) IN ('parcel','parcel_id') AND i.value<>evidence->>'parcelId')))
     THEN RETURN NULL; END IF;
   IF evidence ? 'parcelId' AND EXISTS (SELECT 1 FROM public.property_records p
     WHERE p.id=tracked AND p.parcel_id IS NOT NULL AND p.parcel_id<>evidence->>'parcelId') THEN RETURN NULL; END IF;
   IF evidence ? 'legacyUrl' AND EXISTS (SELECT 1 FROM public.property_identifiers i WHERE i.property_id=tracked
-    AND lower(i.kind) IN ('zillow_url','zillow','listing_url') AND i.value ~* '-[0-9]{5}_rb/$'
-    AND lower(regexp_replace(i.value,'-[0-9]{5}_rb/$', '_rb/','i'))=lower(regexp_replace(evidence->>'legacyUrl','-[0-9]{5}_rb/$', '_rb/'))
-    AND lower(i.value)<>lower(evidence->>'legacyUrl')) THEN RETURN NULL; END IF;
+    AND lower(i.kind) IN ('zillow_url','zillow','listing_url') AND public.browser_legacy_alias_key(i.value) ~ '-[0-9]{5}_rb/$'
+    AND regexp_replace(public.browser_legacy_alias_key(i.value),'-[0-9]{5}_rb/$', '_rb/')=regexp_replace(public.browser_legacy_alias_key(evidence->>'legacyUrl'),'-[0-9]{5}_rb/$', '_rb/')
+    AND public.browser_legacy_alias_key(i.value)<>public.browser_legacy_alias_key(evidence->>'legacyUrl')) THEN RETURN NULL; END IF;
   -- Unique(kind,value) and the zpid transaction lock prevent competing bindings.
   IF legacy THEN
     INSERT INTO public.property_identifiers(property_id,kind,value,source)
@@ -353,6 +358,80 @@ BEGIN
   RETURN jsonb_build_object('matched',true,'zpid',observation->>'zpid','changedFields',changes);
 END; $$;
 REVOKE ALL ON FUNCTION public.save_browser_observation(jsonb) FROM PUBLIC;
+CREATE TABLE IF NOT EXISTS public.browser_watchlist_intake_ledger (
+  capture_id uuid PRIMARY KEY, payload jsonb NOT NULL, acknowledgement jsonb NOT NULL
+);
+CREATE OR REPLACE FUNCTION public.save_browser_watchlist_intake(o jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+DECLARE prior public.browser_watchlist_intake_ledger%ROWTYPE; found_id uuid; address_text text; normalized text; result jsonb; captured timestamptz;
+BEGIN
+  IF jsonb_typeof(o) IS DISTINCT FROM 'object' OR (SELECT count(*) FROM jsonb_object_keys(o))<>9
+    OR NOT o ?& ARRAY['action','zpid','url','legacyUrl','captureId','observedAt','track','listing','identity']
+    OR EXISTS(SELECT 1 FROM jsonb_each(o) WHERE key NOT IN ('listing','identity') AND jsonb_typeof(value)<>'string')
+    OR jsonb_typeof(o->'identity') IS DISTINCT FROM 'object'
+    OR EXISTS(SELECT 1 FROM jsonb_each(o->'identity') WHERE key NOT IN ('mlsNumber','parcelId') OR jsonb_typeof(value)<>'string' OR value #>> '{}' !~ '^[A-Za-z0-9-]{1,40}$')
+    OR jsonb_typeof(o->'listing') IS DISTINCT FROM 'object'
+    OR (CASE WHEN o->'listing'->>'status' IN ('Active','Pending') THEN
+      (SELECT count(*) FROM jsonb_object_keys(o->'listing'))=2 AND jsonb_typeof(o->'listing'->'price')='number' AND (o->'listing'->>'price') ~ '^[1-9][0-9]{0,9}$' AND (o->'listing'->>'price')::numeric<=1000000000
+      ELSE (SELECT count(*) FROM jsonb_object_keys(o->'listing'))=1 AND o->'listing'->>'status' IN ('Sold','Off market','For rent') END) IS NOT TRUE
+    OR o->>'action'<>'watchlist-intake' OR o->>'track' NOT IN ('house','plex')
+    OR o->>'zpid' !~ '^[1-9][0-9]{0,19}$'
+    OR o->>'url' <> 'https://www.zillow.com/homedetails/' || (o->>'zpid') || '_zpid/'
+    OR o->>'legacyUrl' !~* '^https://www\.zillow\.com/homes/[0-9][A-Za-z0-9-]{4,200}-Portland-OR-97[0-9]{3}_rb/$'
+    OR o->>'captureId' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+    OR o->>'observedAt' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$'
+    THEN RAISE EXCEPTION 'invalid intake' USING ERRCODE='22023'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('browser-watchlist-intake',0));
+  SELECT * INTO prior FROM public.browser_watchlist_intake_ledger WHERE capture_id=(o->>'captureId')::uuid;
+  IF FOUND THEN
+    IF prior.payload IS DISTINCT FROM o THEN RAISE EXCEPTION 'capture conflict' USING ERRCODE='22023'; END IF;
+    RETURN prior.acknowledgement;
+  END IF;
+  captured := (o->>'observedAt')::timestamptz;
+  IF NOT isfinite(captured) OR captured < statement_timestamp()-interval '24 hours' OR captured > statement_timestamp()+interval '5 minutes' THEN RAISE EXCEPTION 'invalid timestamp' USING ERRCODE='22023'; END IF;
+  address_text := replace(regexp_replace(regexp_replace(o->>'legacyUrl','^https://www\.zillow\.com/homes/','','i'),'_rb/$','','i'),'-',' ');
+  normalized := upper(regexp_replace(address_text,' +Portland +OR +97[0-9]{3}$','','i'));
+  normalized := regexp_replace(normalized,'\mSTREET\M','ST','g');
+  normalized := regexp_replace(normalized,'\mAVENUE\M','AVE','g');
+  normalized := regexp_replace(normalized,'\mBOULEVARD\M','BLVD','g');
+  normalized := regexp_replace(normalized,'\mROAD\M','RD','g');
+  normalized := regexp_replace(normalized,'\mDRIVE\M','DR','g');
+  normalized := regexp_replace(normalized,'\mCOURT\M','CT','g');
+  normalized := regexp_replace(normalized,'\mPLACE\M','PL','g');
+  normalized := trim(regexp_replace(regexp_replace(normalized,'\mTERRACE\M','TER','g'),' +',' ','g'));
+  -- A rejected intake must roll back resolver alias binding as well.
+  BEGIN
+  found_id := public.resolve_browser_observation_identity(jsonb_build_object('zpid',o->>'zpid','identity',jsonb_build_object('legacyUrl',o->>'legacyUrl') || (o->'identity')));
+  IF found_id IS NOT NULL THEN
+    IF EXISTS (SELECT 1 FROM public.property_records p WHERE p.id=found_id AND p.normalized_address=normalized)
+      OR EXISTS (SELECT 1 FROM public.property_identifiers i WHERE i.property_id=found_id AND lower(i.kind) IN ('zillow_url','zillow','listing_url') AND public.browser_legacy_alias_key(i.value)=public.browser_legacy_alias_key(o->>'legacyUrl')) THEN
+      result := jsonb_build_object('status','existing','zpid',o->>'zpid');
+    ELSE
+      RAISE EXCEPTION 'intake address conflict' USING ERRCODE='N0001';
+    END IF;
+  ELSIF EXISTS(SELECT 1 FROM public.property_records p WHERE p.normalized_address=normalized OR (o->'identity' ? 'parcelId' AND p.parcel_id=o->'identity'->>'parcelId'))
+    OR EXISTS(SELECT 1 FROM public.property_identifiers i WHERE (o->'identity' ? 'parcelId' AND lower(i.kind) IN ('parcel','parcel_id') AND i.value=o->'identity'->>'parcelId') OR (o->'identity' ? 'mlsNumber' AND lower(i.kind) IN ('mls','mls_number') AND i.value=o->'identity'->>'mlsNumber'))
+    OR EXISTS(SELECT 1 FROM public.property_identifiers i WHERE (lower(i.kind) IN ('zpid','zillow_zpid','zillow') AND i.value=o->>'zpid')
+       OR (lower(i.kind) IN ('zillow_url','zillow','listing_url') AND (public.browser_legacy_alias_key(i.value)=public.browser_legacy_alias_key(o->>'legacyUrl') OR i.value ~* ('^https://(www\.)?zillow\.com/homedetails/([^/?#]+/)?' || (o->>'zpid') || '_zpid/?([?#].*)?$')))) THEN
+    result := jsonb_build_object('status','conflict','zpid',o->>'zpid');
+  ELSE
+    INSERT INTO public.property_records(canonical_address,normalized_address,zip_code,track) VALUES(address_text,normalized,right(address_text,5),o->>'track') RETURNING id INTO found_id;
+    INSERT INTO public.property_identifiers(property_id,kind,value,source) VALUES(found_id,'zpid',o->>'zpid','zillow-browser-intake'),(found_id,'zillow_url',o->>'legacyUrl','zillow-browser-intake');
+    IF o->'identity' ? 'mlsNumber' THEN INSERT INTO public.property_identifiers(property_id,kind,value,source) VALUES(found_id,'mls_number',o->'identity'->>'mlsNumber','zillow-browser-intake'); END IF;
+    IF o->'identity' ? 'parcelId' THEN INSERT INTO public.property_identifiers(property_id,kind,value,source) VALUES(found_id,'parcel_id',o->'identity'->>'parcelId','zillow-browser-intake'); END IF;
+    INSERT INTO public.property_listing_events(property_id,event_type,price,status,source,source_ref,observed_at) VALUES(found_id,'browser_observation',(o->'listing'->>'price')::integer,o->'listing'->>'status','zillow-browser',o->>'url',least(captured,statement_timestamp()));
+    INSERT INTO public.property_collections(property_id,collection,track,source) VALUES(found_id,'watchlist',o->>'track','zillow-browser-intake');
+    INSERT INTO public.property_interactions(property_id,interaction_type,source,source_ref) VALUES(found_id,'watchlist','zillow-browser-intake',o->>'url');
+    result := jsonb_build_object('status','created','zpid',o->>'zpid');
+  END IF;
+  EXCEPTION WHEN SQLSTATE 'N0001' THEN
+    result := jsonb_build_object('status','conflict','zpid',o->>'zpid');
+  END;
+  INSERT INTO public.browser_watchlist_intake_ledger VALUES((o->>'captureId')::uuid,o,result);
+  RETURN result;
+END; $$;
+REVOKE ALL ON FUNCTION public.save_browser_watchlist_intake(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.save_browser_watchlist_intake(jsonb) TO browser_observation_writer;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM browser_observation_writer;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM browser_observation_writer;
 REVOKE ALL ON SCHEMA public FROM browser_observation_writer;

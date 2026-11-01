@@ -1,5 +1,5 @@
-import { parseObservation, validToken } from '../../../lib/browser-observations';
-import { saveObservation } from '../../../lib/browser-observation-writes';
+import { parseObservation, parseIntake, validToken } from '../../../lib/browser-observations';
+import { saveObservation, saveIntake } from '../../../lib/browser-observation-writes';
 export const dynamic = 'force-dynamic';
 const headers = { 'Cache-Control': 'no-store', 'Vary': 'Origin' };
 function origin(request: Request) {
@@ -21,8 +21,10 @@ export async function POST(request: Request) {
     let size = 0; const chunks: Uint8Array[] = [];
     while (true) { const {done,value} = await reader.read(); if (done) break; size += value.length; if (size > 256000) { await reader.cancel(); throw Error(); } chunks.push(value); }
     const bytes = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { bytes.set(chunk,offset); offset += chunk.length; }
-    const parsed = parseObservation(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));
+    const raw = JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+    const intake = raw?.action === 'watchlist-intake';
+    const parsed = intake ? parseIntake(raw) : parseObservation(raw);
     if (!parsed) throw Error();
-    try { return Response.json(await saveObservation(parsed),{headers:h}); } catch { return Response.json({error:'unavailable'},{status:503,headers:h}); }
+    try { return Response.json(await (intake ? saveIntake(parsed as import('../../../lib/browser-observations').BrowserIntake) : saveObservation(parsed as import('../../../lib/browser-observations').Observation)),{headers:h}); } catch { return Response.json({error:'unavailable'},{status:503,headers:h}); }
   } catch { return Response.json({error:'invalid request'},{status:400,headers:h}); }
 }
