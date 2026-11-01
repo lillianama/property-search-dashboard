@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
 
 export type Observation = { zpid: string; url: string; captureId: string; observedAt: string; price?: number; status?: 'Active' | 'Pending' };
 export function validToken(header: string | null, token: string | undefined): boolean {
@@ -20,11 +20,4 @@ export function parseObservation(value: unknown, now = Date.now()): Observation 
   // A price is an asking price only on a currently for-sale listing.
   if (o.price !== undefined && o.status !== 'Active' && o.status !== 'Pending') return null;
   return o as Observation;
-}
-export function fingerprint(o: Observation): string {
-  return createHash('sha256').update(JSON.stringify(['zillow',o.zpid,o.price ?? null,o.status ?? null])).digest('hex');
-}
-
-export function captureFingerprint(o: Observation): string {
-  return createHash('sha256').update(JSON.stringify(['zillow',o.zpid,o.captureId])).digest('hex');
 }

@@ -1,17 +1,33 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({queries: [] as string[], match: 1, duplicate: false, currentCalls: 0, config: {} as Record<string,unknown>, onError: undefined as ((error: Error) => void) | undefined}));
-vi.mock('pg', () => ({Pool: class { constructor(config: Record<string,unknown>) { state.config=config; } on(_event: string, cb: (error: Error) => void) { state.onError=cb; } async connect() { return {release(){}, async query(sql:string) {
- state.queries.push(sql);
- if (sql.includes('SELECT DISTINCT property_id')) return {rows: state.match ? [{property_id:'uuid'}] : [],rowCount:state.match};
- if (sql.includes('SELECT 1 FROM browser_observation_history WHERE')) return {rows:[],rowCount:state.duplicate ? 1 : 0};
- if (sql.includes('FROM property_current WHERE')) { state.currentCalls++; return {rows:[state.currentCalls===1 ? {latest_price:400000,latest_status:'Active'} : {latest_price:500000,latest_status:'Active'}]}; }
- return {rows:[],rowCount:1};
- }}; }}}));
+const state = vi.hoisted(() => ({query: vi.fn(), config: {} as Record<string,unknown>, onError: undefined as ((error: Error) => void) | undefined}));
+vi.mock('pg', () => ({Pool: class {
+  constructor(config: Record<string,unknown>) { state.config=config; }
+  on(_event: string, cb: (error: Error) => void) { state.onError=cb; }
+  query = state.query;
+}}));
 import { saveObservation } from './browser-observation-writes';
 const observation={zpid:'123',captureId:'11111111-1111-4111-8111-111111111111',url:'https://www.zillow.com/homedetails/123_zpid/',observedAt:new Date().toISOString(),price:500000,status:'Active' as const};
-beforeEach(()=>{process.env.BROWSER_OBSERVATION_DATABASE_URL='postgres://unused';state.queries=[];state.match=1;state.duplicate=false;state.currentCalls=0;});
-describe('observation transaction',()=>{
- it('locks, matches existing identity, appends history and projects before acknowledging',async()=>{expect(await saveObservation(observation)).toEqual({matched:true,zpid:'123',changedFields:['price']}); const q=state.queries.join('\n'); expect(q).toContain('pg_advisory_xact_lock');expect(q).toContain('INSERT INTO browser_observation_history');expect(q).toContain('INSERT INTO property_listing_events');expect(q).toContain('COMMIT');expect(q).not.toMatch(/UPDATE |DELETE /);});
- it('limits connection time and logs idle errors without details',async()=>{ await saveObservation(observation); expect(state.config).toMatchObject({connectionTimeoutMillis:5000,statement_timeout:10000,idleTimeoutMillis:30000}); const log=vi.spyOn(console,'error').mockImplementation(()=>{}); state.onError?.(new Error('secret connection detail')); expect(log).toHaveBeenCalledWith('[browser-observations] idle database connection error'); expect(JSON.stringify(log.mock.calls)).not.toContain('secret'); log.mockRestore(); });
- it('does not insert for a duplicate or unmatched identity',async()=>{state.duplicate=true;expect((await saveObservation(observation)).changedFields).toEqual([]);expect(state.queries.join('\n')).not.toContain('INSERT INTO');state.queries=[];state.match=0;expect((await saveObservation(observation)).matched).toBe(false);expect(state.queries.join('\n')).not.toContain('INSERT INTO');});
+beforeEach(()=>{process.env.BROWSER_OBSERVATION_DATABASE_URL='postgres://unused';state.query.mockReset();});
+describe('observation function wrapper',()=>{
+ it('delegates one parameterized call and preserves the original retry result',async()=>{
+   const result={matched:true,zpid:'123',changedFields:['price']};
+   state.query.mockResolvedValue({rows:[{result}]});
+   expect(await saveObservation(observation)).toEqual(result);
+   expect(await saveObservation(observation)).toEqual(result);
+   expect(state.query).toHaveBeenCalledWith('SELECT public.save_browser_observation($1::jsonb) AS result',[JSON.stringify(observation)]);
+ });
+ it('returns unmatched and propagates transaction failure',async()=>{
+   state.query.mockResolvedValueOnce({rows:[{result:{matched:false,changedFields:[]}}]}).mockRejectedValueOnce(new Error('rollback'));
+   expect(await saveObservation(observation)).toEqual({matched:false,changedFields:[]});
+   await expect(saveObservation(observation)).rejects.toThrow('rollback');
+ });
+ it('limits connection time and logs idle errors without details',async()=>{
+   state.query.mockResolvedValue({rows:[{result:{matched:false,changedFields:[]}}]});
+   await saveObservation(observation);
+   expect(state.config).toMatchObject({connectionTimeoutMillis:5000,statement_timeout:10000,idleTimeoutMillis:30000});
+   const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+   state.onError?.(new Error('secret connection detail'));
+   expect(log).toHaveBeenCalledWith('[browser-observations] idle database connection error');
+   expect(JSON.stringify(log.mock.calls)).not.toContain('secret');log.mockRestore();
+ });
 });
