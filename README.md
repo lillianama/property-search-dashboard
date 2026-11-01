@@ -70,7 +70,7 @@ The extension uses a separate scoped token, an allowed extension ID, and a restr
 1. Provision a dedicated PostgreSQL LOGIN role named `browser_observation_writer`, without inherited application privileges. As the trusted schema owner, review and apply [scripts/browser-observation-schema.sql](scripts/browser-observation-schema.sql) after the property/editor/ranking schemas. It grants execution on validated functions, not direct table access.
 2. Set `BROWSER_OBSERVATION_DATABASE_URL` for that role, a strong private `BROWSER_OBSERVATION_TOKEN`, and `BROWSER_OBSERVATION_EXTENSION_ID` from Chrome. All three are required; the API stays disabled otherwise. See [.env.example](.env.example).
 3. Configure the authenticated TLS proxy so the extension can reach `OPTIONS` and bearer-authenticated `POST /api/browser-observations` without an interactive login redirect. Preserve authentication on dashboard pages; the endpoint checks its own token and extension origin.
-4. Follow the [extension setup](https://github.com/lillianama/property-search-browser-extension#-let-it-perch-in-chrome). Recognition and capture are separate: an exact apartment-range alias may report a tracked whole property while apartment capture and Add remain blocked.
+4. Follow the [extension setup](https://github.com/lillianama/property-search-browser-extension#quick-start). Recognition and capture are separate: an exact apartment-range alias may report a tracked whole property while apartment capture and Add remain blocked.
 
 ### Database and runtime contract
 
