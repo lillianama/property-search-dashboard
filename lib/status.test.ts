@@ -42,6 +42,15 @@ describe("classifyStatus", () => {
     expect(classifyStatus("Sale Pending")).toBe("pending");
   });
 
+  it.each([
+    "Inactive", " OFF MARKET ", "off-market", "off_market", "Off   the Market",
+    "withdrawn", "expired", "cancelled", "canceled", "delisted", "removed", "for rent",
+  ])("normalizes %s through classification, raw fallback and timeline resolution", raw => {
+    expect(classifyStatus(raw)).toBe("inactive");
+    expect(displayStatusFromRaw(raw)).toBe("Inactive");
+    expect(resolveDisplayStatus([event({ status: raw })])).toBe("Inactive");
+  });
+
   it("returns null for blank, null, or unrecognized values", () => {
     expect(classifyStatus(null)).toBeNull();
     expect(classifyStatus("")).toBeNull();

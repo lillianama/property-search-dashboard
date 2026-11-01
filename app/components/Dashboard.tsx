@@ -26,6 +26,7 @@ import type { DashboardResponse, HouseRecord } from "../../lib/types";
 import type { FilterFormValue, HousesView } from "../../lib/url-state";
 import { EMPTY_FILTER_FORM, FiltersBar } from "./FiltersBar";
 import { FunnelBoard, type MovePlacement } from "./FunnelBoard";
+import { LifecycleTable } from "./LifecycleTable";
 import { KpiCards } from "./KpiCards";
 import { PitiAssumptionsPanel } from "./PitiAssumptionsPanel";
 import { PropertyEditorScreen } from "./PropertyEditorScreen";
@@ -97,6 +98,7 @@ export function Dashboard({
   pitiStorageKey?: string;
 }) {
   const track = useTrack();
+  const isArchive = lifecycleView !== "search";
   const pitiStorageKey = configuredPitiStorageKey || DEFAULT_PITI_STORAGE_KEY;
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -156,12 +158,12 @@ export function Dashboard({
   useEffect(() => {
     const previous = prevEditingIdRef.current;
     prevEditingIdRef.current = editingId;
-    const rowId = rowHighlightOnEditorClose(previous, editingId, view);
+    const rowId = rowHighlightOnEditorClose(previous, editingId, isArchive ? "list" : view);
     if (!rowId) return;
     setHighlightRowId(rowId);
     const timer = window.setTimeout(() => setHighlightRowId(null), ROW_HIGHLIGHT_DURATION_MS);
     return () => window.clearTimeout(timer);
-  }, [editingId, view]);
+  }, [editingId, view, isArchive]);
 
   const query = useMemo(() => {
     const params = new URLSearchParams(buildQueryString(filters));
@@ -362,7 +364,7 @@ export function Dashboard({
     <>
       <header className="dashboard-header">
         <p className="eyebrow">PRIVATE MARKET INTELLIGENCE</p>
-        <h1>{lifecycleView === "sold" ? "Sold archive" : lifecycleView === "pending" ? "Pending / Backup" : "My Search"}</h1>
+        <h1>{lifecycleView === "sold" ? "Sold/Inactive" : lifecycleView === "pending" ? "Pending / Backup" : "My Search"}</h1>
         <p className="lede">
           A research log of the {track === "plex" ? "plexes" : "houses"} you have tracked in the property store: current status, prices,
           bedroom sizing, and how that set has grown over time. Not a live market feed.
@@ -394,32 +396,37 @@ export function Dashboard({
 
       {data && (
         <>
-          <KpiCards summary={data.summary} />
+          {!isArchive && (
+            <>
+              <KpiCards summary={data.summary} />
 
-          <section className="dashboard-section">
-            <h2>Tracked listing activity over time</h2>
-            <p className="section-note">
-              Monthly count of listing events this dashboard has recorded, and their median price. This is the
-              tracked/researched dataset, <strong>not</strong> full Portland MLS inventory.
-            </p>
-            <HistoryChart data={data.history} />
-          </section>
+              <section className="dashboard-section">
+                <h2>Tracked listing activity over time</h2>
+                <p className="section-note">
+                  Monthly count of listing events this dashboard has recorded, and their median price. This is the
+                  tracked/researched dataset, <strong>not</strong> full Portland MLS inventory.
+                </p>
+                <HistoryChart data={data.history} />
+              </section>
 
-          <section className="dashboard-grid-2">
-            <div className="dashboard-section">
-              <h2>Price distribution</h2>
-              <PriceDistributionChart data={data.priceDistribution} />
-            </div>
-            <div className="dashboard-section">
-              <h2>Status distribution</h2>
-              <StatusDistributionChart data={data.statusDistribution} />
-            </div>
-          </section>
+              <section className="dashboard-grid-2">
+                <div className="dashboard-section">
+                  <h2>Price distribution</h2>
+                  <PriceDistributionChart data={data.priceDistribution} />
+                </div>
+                <div className="dashboard-section">
+                  <h2>Status distribution</h2>
+                  <StatusDistributionChart data={data.statusDistribution} />
+                </div>
+              </section>
+
+            </>
+          )}
 
           <section className="dashboard-section">
             <div className="houses-view-header">
               <h2 id="houses-view-heading">Tracked {track === "plex" ? "plexes" : "houses"}</h2>
-              <div className="view-toggle" role="group" aria-label="Tracked properties view">
+              {!isArchive && <div className="view-toggle" role="group" aria-label="Tracked properties view">
                 {VIEW_OPTIONS.map((option) => (
                   <button
                     key={option.id}
@@ -431,12 +438,18 @@ export function Dashboard({
                     {option.label}
                   </button>
                 ))}
-              </div>
+              </div>}
             </div>
             <p className="section-note">{data.meta.photoCoverageNote}</p>
             <p className="section-note">{data.meta.streetViewNote}</p>
 
-            {view === "map" ? (
+            {isArchive ? (
+              <LifecycleTable
+                properties={visibleProperties}
+                onEditNotes={(house) => onOpenEditor(house.id)}
+                highlightId={highlightRowId}
+              />
+            ) : view === "map" ? (
               <PropertyMap
                 properties={visibleProperties}
                 large

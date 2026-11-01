@@ -1,7 +1,7 @@
 import { lifecycleDetailLines } from "./lifecycle-display";
 import type { HouseRecord } from "./types";
 import { describe, expect, it } from "vitest";
-import { lifecycleFacts, saleComparison } from "./lifecycle";
+import { filterLifecycle, parseLifecycleView, lifecycleFacts, saleComparison } from "./lifecycle";
 import type { StatusEventRow } from "./status";
 import { DEFAULT_APP_URL_STATE, parseAppUrlState, serializeAppUrlState, switchUrlScope } from "./url-state";
 const event = (id: number, status: string | null, extra: Partial<StatusEventRow> = {}): StatusEventRow => ({
@@ -92,5 +92,24 @@ describe("historical ownership sales versus tracked listing cycles", () => {
     expect(lifecycleFacts([sale]).displayStatus).toBe("Sold");
     expect(lifecycleFacts([event(1, "Active"), event(2, "Sold", { source, eventType: "sold" }),
       event(3, "Active", { source: "workspace-state" })]).displayStatus).toBe("Sold");
+  });
+});
+
+
+describe("Sold/Inactive lifecycle membership", () => {
+  const houses = ["Active", "Pending", "Sold", "Inactive", "Unverified", "Unknown"].map(displayStatus => ({
+    displayStatus: displayStatus as HouseRecord["displayStatus"],
+  }));
+  it("partitions resolved statuses without dropping unverified research or changing records", () => {
+    expect(filterLifecycle(houses, "search").map(h => h.displayStatus)).toEqual(["Active", "Unverified", "Unknown"]);
+    expect(filterLifecycle(houses, "pending")).toEqual([houses[1]]);
+    expect(filterLifecycle(houses, "sold")).toEqual([houses[2], houses[3]]);
+    expect(filterLifecycle(houses, "sold")[1]).toBe(houses[3]);
+  });
+  it("retains legacy sold URLs including filters and property detail state", () => {
+    const state = parseAppUrlState("tab=sold&view=map&edit=p&status=Inactive");
+    expect(state).toMatchObject({ tab: "sold", editingId: "p", filters: { statuses: ["Inactive"] } });
+    expect(parseAppUrlState(serializeAppUrlState(state))).toEqual(state);
+    expect(parseLifecycleView("sold")).toBe("sold");
   });
 });

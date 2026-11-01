@@ -86,7 +86,7 @@ export function lifecycleFacts(rows: StatusEventRow[]) {
 }
 
 export function filterLifecycle<T extends Pick<HouseRecord, "displayStatus">>(houses: T[], view: LifecycleView): T[] {
-  return houses.filter(h => view === "sold" ? h.displayStatus === "Sold"
+  return houses.filter(h => view === "sold" ? (h.displayStatus === "Sold" || h.displayStatus === "Inactive")
     : view === "pending" ? h.displayStatus === "Pending"
-    : h.displayStatus !== "Sold" && h.displayStatus !== "Pending");
+    : h.displayStatus !== "Sold" && h.displayStatus !== "Inactive" && h.displayStatus !== "Pending");
 }

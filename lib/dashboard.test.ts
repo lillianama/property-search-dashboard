@@ -504,3 +504,32 @@ describe("lifecycle partitions preserve user state", () => {
     expect(events[2].status).toBe("Sold");
   });
 });
+
+
+describe("inactive lifecycle resolution", () => {
+  it.each(["house", "plex"] as const)("routes resolved inactive %s properties, preserves filters/state and rejection precedence", async track => {
+    const inactive = house({ id: "inactive", rankKey: "k", judgments: { bedroomSizeOk: "yes", rentalIncome: "no", drumSpace: "unknown" } });
+    vi.mocked(fetchHouses).mockResolvedValue([inactive, house({ id: "pending" }), house({ id: "rejected" })]);
+    vi.mocked(fetchPhotoSourceRows).mockResolvedValue([]);
+    vi.mocked(fetchActiveFunnelCollections).mockResolvedValue([{ propertyId: "inactive", collection: "top-contenders" }]);
+    vi.mocked(fetchLatestDecisionRows).mockResolvedValue([{ propertyId: "rejected", verdict: "reject", note: "Keep rejected", occurredAt: "2026-07-04" }]);
+    const events = [
+      { propertyId: "inactive", status: "off_market", source: "rmls", id: 1 },
+      { propertyId: "pending", status: "Pending", source: "rmls", id: 2 },
+      { propertyId: "pending", status: "off-market", source: "watchlist-status-check", id: 3 },
+      { propertyId: "rejected", status: "Inactive", source: "rmls", id: 4 },
+    ].map(e => ({ ...e, eventDate: "2026-07-03", observedAt: `2026-07-03T0${e.id}:00:00Z` }));
+    vi.mocked(fetchStatusEventRows).mockResolvedValue(events);
+    expect((await buildDashboardResponse(NO_FILTERS, track)).properties).toEqual([]);
+    expect((await buildDashboardResponse(NO_FILTERS, track, "pending")).properties.map(h => h.id)).toEqual(["pending"]);
+    const filters = { ...NO_FILTERS, statuses: ["Inactive"], minBedrooms: 3 };
+    const archived = await buildDashboardResponse(filters, track, "sold");
+    expect(archived.properties.map(h => h.id)).toEqual(["inactive"]);
+    expect(archived.properties[0]).toMatchObject({ displayStatus: "Inactive", rankKey: "k", funnelBucket: "top-contenders", judgments: inactive.judgments });
+    expect(fetchHouses).toHaveBeenLastCalledWith(filters, track);
+    expect(fetchMonthlyListingEvents).toHaveBeenLastCalledWith(filters, ["inactive"]);
+    vi.mocked(fetchStatusEventRows).mockResolvedValue([...events, { propertyId: "inactive", status: "Active", source: "rmls", id: 5, eventDate: "2026-07-05", observedAt: "2026-07-05" }]);
+    expect((await buildDashboardResponse(NO_FILTERS, track)).properties[0]).toMatchObject({ id: "inactive", rankKey: "k", funnelBucket: "top-contenders", judgments: inactive.judgments });
+    expect(inactive).toMatchObject({ displayStatus: "Active", rankKey: "k" });
+  });
+});

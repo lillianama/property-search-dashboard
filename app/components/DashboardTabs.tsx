@@ -27,7 +27,7 @@ const TABS: Array<{ id: TabId; label: string }> = [
   { id: "market", label: "Market" },
   { id: "search", label: "My Search" },
   { id: "pending", label: "Pending / Backup" },
-  { id: "sold", label: "Sold" },
+  { id: "sold", label: "Sold/Inactive" },
   { id: "rejected", label: "Rejected" },
 ];
 
