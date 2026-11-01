@@ -1871,3 +1871,11 @@ button:active:not(:disabled) { transform: translateY(0); }
   pointer-events: none;
   z-index: 100;
 }
+
+.plex-net-income { font-size: 0.82rem; color: var(--text-muted); }
+.plex-net-income summary { cursor: pointer; }
+.plex-net-income summary strong { font-weight: 700; }
+.plex-net-income-positive summary strong { color: #15803d; }
+.plex-net-income-negative summary strong { color: #dc2626; }
+.plex-net-income-explanation { max-width: 38rem; }
+.plex-net-income-explanation small { display: block; }

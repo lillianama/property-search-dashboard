@@ -1,5 +1,7 @@
 "use client";
 
+import { PlexNetIncome } from "./PlexNetIncome";
+
 import { lifecycleDetailLines } from "../../lib/lifecycle-display";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ACTION_EDIT_CLASS, ACTION_REJECT_CLASS } from "../../lib/action-styles";
@@ -713,6 +715,9 @@ function FunnelRow({
 
         <div className="funnel-row-line funnel-row-meta">
           <PitiEstimate house={house} assumptions={pitiAssumptions} />
+          {track === "plex" && <PlexNetIncome summary={house.plexUnits} piti={computePiti(
+            { price: house.latestPrice, actualAnnualTax: house.annualTaxAmount }, pitiAssumptions,
+          )} />}
           <JudgmentPills judgments={house.judgments} />
         </div>
       </div>
