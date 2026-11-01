@@ -59,7 +59,7 @@ describe("whole-building estimated net income", () => {
     const house = { id: "test", address: "Example St", funnelBucket: "watchlist", rankKey: "h", displayStatus: "Active",
       latestPrice: 500000, annualTaxAmount: 6000, bedroomSizeFlag: "unknown", judgments: {}, plexUnits: summary() } as HouseRecord;
     const render = (track: "house" | "plex", property = house) => renderToStaticMarkup(createElement(TrackContext.Provider, { value: track },
-      createElement(FunnelBoard, { properties: [property], placements: {}, onMove: vi.fn(), onEditNotes: vi.fn(), onWatchlistBottom: vi.fn(), pitiAssumptions: DEFAULT_PITI_ASSUMPTIONS })));
+      createElement(FunnelBoard, { properties: [property], placements: {}, onMove: vi.fn(), onEditNotes: vi.fn(), onWatchlistTop: vi.fn(), onWatchlistBottom: vi.fn(), pitiAssumptions: DEFAULT_PITI_ASSUMPTIONS })));
     const html = render("plex");
     const meta = html.slice(html.indexOf('class="funnel-row-line funnel-row-meta"'));
     expect(meta).toMatch(/^class="funnel-row-line funnel-row-meta"><details class="piti-details"[\s\S]*?<\/details><details class="plex-net-income /);

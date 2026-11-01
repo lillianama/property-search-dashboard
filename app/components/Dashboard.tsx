@@ -338,7 +338,7 @@ export function Dashboard({
 
   const bottomMovePending = useRef(false);
   const [bottomMoveBusy, setBottomMoveBusy] = useState(false);
-  const moveToWatchlistBottom = useCallback(async (house: HouseRecord) => {
+  const moveToWatchlistEdge = useCallback(async (house: HouseRecord, edge: "top" | "bottom") => {
     if (bottomMovePending.current) return;
     bottomMovePending.current = true;
     setBottomMoveBusy(true);
@@ -349,11 +349,14 @@ export function Dashboard({
       const fresh = await res.json() as DashboardResponse;
       if (!mountedRef.current) return;
       const all = applyLocalFunnelState(fresh.properties, localFunnel);
-      const rows = groupByBucket(all, localFunnel.placements).watchlist.filter((row) => row.id !== house.id);
-      const last = rows.at(-1);
-      if (last) await requestMove(house, "watchlist", { placement: { afterId: last.id, beforeId: null } });
+      const rows = groupByBucket(all, localFunnel.placements).watchlist;
+      const currentEdge = edge === "top" ? rows[0] : rows.at(-1);
+      if (!currentEdge || currentEdge.id === house.id) return;
+      await requestMove(house, "watchlist", { placement: edge === "top"
+        ? { afterId: null, beforeId: currentEdge.id }
+        : { afterId: currentEdge.id, beforeId: null } });
     } catch {
-      if (mountedRef.current) setAnnouncement(`Could not move ${house.address} to the bottom. The change was not saved.`);
+      if (mountedRef.current) setAnnouncement(`Could not move ${house.address} to the ${edge}. The change was not saved.`);
     } finally {
       bottomMovePending.current = false;
       if (mountedRef.current) setBottomMoveBusy(false);
@@ -464,7 +467,8 @@ export function Dashboard({
                   properties={visibleProperties}
                   placements={localFunnel.placements}
                   onMove={requestMove}
-                  onWatchlistBottom={moveToWatchlistBottom}
+                  onWatchlistTop={(house) => moveToWatchlistEdge(house, "top")}
+                  onWatchlistBottom={(house) => moveToWatchlistEdge(house, "bottom")}
                   bottomMoveBusy={bottomMoveBusy}
                   pitiAssumptions={pitiAssumptions}
                   onEditNotes={(house) => onOpenEditor(house.id)}

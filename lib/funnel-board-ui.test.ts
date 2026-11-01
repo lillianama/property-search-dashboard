@@ -16,7 +16,8 @@ vi.mock("react", async importOriginal => ({
   useEffect: () => {},
 }));
 vi.mock("../app/components/PropertyPhoto", () => ({ PropertyPhoto: () => null }));
-vi.mock("../app/components/TrackContext", () => ({ useTrack: () => "house" }));
+const trackState = vi.hoisted(() => ({ track: "house" }));
+vi.mock("../app/components/TrackContext", () => ({ useTrack: () => trackState.track }));
 
 function elements(node: ReactNode): ReactElement<Record<string, any>>[] {
   if (Array.isArray(node)) return node.flatMap(elements);
@@ -33,12 +34,12 @@ function house(bucket: FunnelBucket, id: string = bucket): HouseRecord {
 
 describe("rendered funnel bucket actions", () => {
   it.each([
-    ["watchlist", ["To tour", "Top contender", "To bottom", "Edit", "Reject"]],
+    ["watchlist", ["To tour", "Top contender", "To top", "To bottom", "Edit", "Reject"]],
     ["to-tour", ["Top contender", "To Watchlist", "Edit", "Reject"]],
     ["top-contenders", ["To Watchlist", "Edit", "Reject"]],
   ] as const)("renders the full action set for %s", (bucket, labels) => {
     const props = { properties: [house(bucket)], placements: {}, onMove: vi.fn(),
-      onWatchlistBottom: vi.fn(), onEditNotes: vi.fn(), pitiAssumptions: DEFAULT_PITI_ASSUMPTIONS };
+      onWatchlistTop: vi.fn(), onWatchlistBottom: vi.fn(), onEditNotes: vi.fn(), pitiAssumptions: DEFAULT_PITI_ASSUMPTIONS };
     const html = renderToStaticMarkup(createElement(FunnelBoard, props));
     const actionHtml = html.slice(html.indexOf('class="funnel-row-actions"'));
     const buttons = [...actionHtml.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)]
@@ -61,7 +62,7 @@ describe("rendered funnel bucket actions", () => {
     const onEditNotes = vi.fn();
     const onWatchlistBottom = vi.fn();
     const tree = FunnelBoard({ properties: [source, neighbor], placements: {}, onMove,
-      onEditNotes, onWatchlistBottom, pitiAssumptions: DEFAULT_PITI_ASSUMPTIONS });
+      onEditNotes, onWatchlistTop: vi.fn(), onWatchlistBottom, pitiAssumptions: DEFAULT_PITI_ASSUMPTIONS });
     const row = elements(tree).find(el => el.props.house === source)!;
     const renderedRow = (row.type as (props: any) => ReactNode)(row.props);
     const button = elements(renderedRow).find(el => el.type === "button" &&
@@ -78,5 +79,30 @@ describe("rendered funnel bucket actions", () => {
       expect(onWatchlistBottom).toHaveBeenCalledWith(source);
     }
     expect(source).toMatchObject({ funnelBucket: origin, rankKey: "h" });
+  });
+});
+
+ describe.each(["house", "plex"])("%s watchlist top action wiring", track => {
+  it("places Top directly above Bottom and calls only the top callback", () => {
+    trackState.track = track;
+    const source = house("watchlist", "source");
+    const onWatchlistTop = vi.fn();
+    const onWatchlistBottom = vi.fn();
+    const onMove = vi.fn();
+    const tree = FunnelBoard({ properties: [source], placements: {}, onMove,
+      onWatchlistTop, onWatchlistBottom, onEditNotes: vi.fn(), bottomMoveBusy: true,
+      pitiAssumptions: DEFAULT_PITI_ASSUMPTIONS });
+    const row = elements(tree).find(el => el.props.house === source)!;
+    const rendered = (row.type as (props: any) => ReactNode)(row.props);
+    const buttons = elements(rendered).filter(el => el.type === "button");
+    const topIndex = buttons.findIndex(el => el.props["aria-label"] === `Move ${source.address} to top of Watchlist`);
+    expect(topIndex).toBeGreaterThan(-1);
+    expect(buttons[topIndex + 1].props["aria-label"]).toBe(`Move ${source.address} to bottom of Watchlist`);
+    expect(buttons[topIndex].props.disabled).toBe(true);
+    expect(buttons[topIndex + 1].props.disabled).toBe(true);
+    buttons[topIndex].props.onClick();
+    expect(onWatchlistTop).toHaveBeenCalledExactlyOnceWith(source);
+    expect(onWatchlistBottom).not.toHaveBeenCalled();
+    expect(onMove).not.toHaveBeenCalled();
   });
 });

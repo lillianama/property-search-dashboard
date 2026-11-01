@@ -168,6 +168,24 @@ describe("executeFunnelMove global rank placement", () => {
   const rankInserts = (queries: RecordedQuery[]) =>
     queries.filter((q) => q.sql.includes("INSERT INTO property_funnel_ranks"));
 
+  it.each(["house", "plex"] as const)("%s To Top persists only the selected rank and preserves other order and collections", async track => {
+    const { client, queries } = fakeClient({ activeCollections: ["watchlist"], rankRows: threeRanked });
+    useClient(client);
+    const outcome = await executeFunnelMove({ propertyId: THIRD_UUID, action: "watchlist", note: null,
+      afterId: null, beforeId: UUID }, track);
+    expect(outcome).toEqual({ ok: true, changed: true });
+    const inserts = rankInserts(queries);
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].params[0]).toBe(THIRD_UUID);
+    expect((inserts[0].params[1] as string) < "8").toBe(true);
+    const ordered = threeRanked.map(row => ({ ...row, rank_key: row.id === THIRD_UUID
+      ? inserts[0].params[1] as string : row.rank_key! }))
+      .sort((a, b) => a.rank_key! < b.rank_key! ? -1 : 1);
+    expect(ordered.map(row => row.id)).toEqual([THIRD_UUID, UUID, OTHER_UUID]);
+    expect(queries.some(q => /INSERT INTO property_collections|SET active = false/.test(q.sql))).toBe(false);
+    expect(queries.find(q => q.sql.includes("FROM property_records WHERE"))?.params).toEqual([THIRD_UUID, track]);
+  });
+
   it("within-bucket reorder writes ONE rank revision between the neighbors and no category change", async () => {
     const { client, queries } = fakeClient({ activeCollections: ["watchlist"], rankRows: threeRanked });
     useClient(client);

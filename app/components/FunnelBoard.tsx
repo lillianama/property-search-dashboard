@@ -79,6 +79,7 @@ export function FunnelBoard({
   properties,
   placements,
   onMove,
+  onWatchlistTop,
   onWatchlistBottom,
   bottomMoveBusy = false,
   pitiAssumptions,
@@ -92,6 +93,7 @@ export function FunnelBoard({
     action: FunnelAction,
     options?: { note?: string | null; placement?: MovePlacement },
   ) => void;
+  onWatchlistTop: (house: HouseRecord) => void;
   onWatchlistBottom: (house: HouseRecord) => void;
   bottomMoveBusy?: boolean;
   pitiAssumptions: PitiAssumptions;
@@ -417,6 +419,7 @@ export function FunnelBoard({
                     onDragEnd={clearDrag}
                     onReject={() => setPendingReject({ house: entry })}
                     onEditNotes={() => onEditNotes(entry)}
+                    onTop={bucket === "watchlist" ? () => onWatchlistTop(entry) : undefined}
                     onBottom={bucket === "watchlist" ? () => onWatchlistBottom(entry) : undefined}
                     bottomMoveBusy={bottomMoveBusy}
                     onQuickMove={(target) => {
@@ -625,6 +628,7 @@ function FunnelRow({
   onReject,
   onEditNotes,
   onQuickMove,
+  onTop,
   onBottom,
   bottomMoveBusy,
 }: {
@@ -641,6 +645,7 @@ function FunnelRow({
   onReject: () => void;
   onEditNotes: () => void;
   onQuickMove: (bucket: FunnelBucket) => void;
+  onTop?: () => void;
   onBottom?: () => void;
   bottomMoveBusy: boolean;
 }) {
@@ -736,6 +741,14 @@ function FunnelRow({
         {house.funnelBucket !== "watchlist" && <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
           onClick={() => onQuickMove("watchlist")} aria-label={`Move ${house.address} to Watchlist`}>
           To Watchlist
+        </button>}
+        {onTop && <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
+          onClick={onTop} disabled={bottomMoveBusy} aria-label={`Move ${house.address} to top of Watchlist`}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+            <path d="M12 21V9m-4 4 4-4 4 4M5 3h14" />
+          </svg>
+          To top
         </button>}
         {onBottom && <button type="button" className="btn-secondary funnel-row-action funnel-quick-move"
           onClick={onBottom} disabled={bottomMoveBusy} aria-label={`Move ${house.address} to bottom of Watchlist`}>
