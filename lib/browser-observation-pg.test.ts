@@ -387,6 +387,43 @@ integration('real PostgreSQL observation transaction', () => {
       await admin.query('DELETE FROM property_records WHERE id=$1',[id]);
     }
   });
+  it.runIf(!!process.env.BROWSER_OBSERVATION_EXTENSION_REPO).each([true,false])('collects literal Sold label through worker and API without an asking price (dated history=%s)',async(history)=>{
+    const root=process.env.BROWSER_OBSERVATION_EXTENSION_REPO!, require=createRequire(import.meta.url);
+    const extractor=require(resolve(root,'extract.js')), builder=require(resolve(root,'capture-requests.js'));
+    (globalThis as any).ZillowDomFields=require(resolve(root,'dom-fields.js'));
+    const f=require(resolve(root,'test/sold-fixture.cjs'))('Sold for $439,000',history);
+    const observation=extractor.collect(f.document,f.url,f.style);
+    expect(observation.status).toBe('Sold');expect(observation.price).toBeUndefined();
+    const id=randomUUID(),url=f.url;
+    await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address) VALUES($1,'sold fixture','sold fixture')",[id]);
+    await admin.query("INSERT INTO property_identifiers(property_id,kind,value) VALUES($1,'zpid','53836087')",[id]);
+    process.env.BROWSER_OBSERVATION_EXTENSION_ID='abcdefghijklmnopabcdefghijklmnop';process.env.BROWSER_OBSERVATION_TOKEN='test-token';
+    const bodies:any[]=[];
+    let listener:any;
+    const chrome={runtime:{id:'extension',onMessage:{addListener:(f:any)=>listener=f}},storage:{local:{setAccessLevel:async()=>{},get:async()=>({origin:'https://dashboard.test',token:'test-token'})}},tabs:{get:async()=>({url})},permissions:{contains:async()=>true}};
+    runInNewContext(readFileSync(resolve(root,'worker.js'),'utf8'),{chrome,URL,AbortSignal,TextEncoder,importScripts:()=>{},ZillowExtract:extractor,fetch:async(_url:string,init:RequestInit)=>{
+      bodies.push(JSON.parse(init.body as string));
+      return POST(new Request('https://dashboard.test/api/browser-observations',{...init,headers:{...init.headers,Origin:'chrome-extension://abcdefghijklmnopabcdefghijklmnop'}}));
+    }});
+    try {
+      const captures=builder.build(observation,randomUUID);
+      const result=await new Promise<any>(r=>listener({type:'observe',observation:{...observation,captures}},{id:'extension',frameId:0,tab:{id:1,url},url},r));
+      expect(result.ok).toBe(true);expect(bodies).toEqual(captures);
+      expect(bodies[0].value).toEqual({status:'Sold'});
+      expect(bodies.some(b=>b.field==='price')).toBe(false);
+      const events=(await admin.query('SELECT event_type,event_date::text,price,status,raw FROM property_listing_events WHERE property_id=$1 ORDER BY event_type',[id])).rows;
+      expect(events.find(e=>e.event_type==='browser_observation')).toMatchObject({price:null,status:'Sold',event_date:null});
+      expect((await admin.query('SELECT latest_status,latest_sale_price FROM property_current WHERE id=$1',[id])).rows[0]).toEqual({latest_status:'Sold',latest_sale_price:history?439000:null});
+      if(history) expect(events.find(e=>e.event_type==='sold')).toMatchObject({price:439000,event_date:'2026-10-15',raw:{date:'2026-10-15',event:'Sold',price:439000,kind:'sale'}});
+      else expect(events).toHaveLength(1);
+      expect(events.some(e=>e.price===492700)).toBe(false);
+      expect(Number((await admin.query('SELECT count(*) n FROM browser_observation_field_history WHERE property_id=$1',[id])).rows[0].n)).toBe(captures.length);
+    } finally {
+      delete (globalThis as any).ZillowDomFields;
+      await admin.query('DELETE FROM browser_observation_field_history WHERE property_id=$1',[id]);
+      await admin.query('DELETE FROM property_records WHERE id=$1',[id]);
+    }
+  });
   it.runIf(!!process.env.BROWSER_OFFLINE_HTML)('renders the private saved page through production worker and authenticated HTTP into PostgreSQL',async()=>{
     const id='66666666-6666-4666-8666-666666666666';
     await admin.query("INSERT INTO property_records(id,canonical_address,normalized_address,track) VALUES($1,'offline fixture','offline fixture','house')",[id]);
