@@ -8,7 +8,7 @@ vi.mock('pg', () => ({Pool: class { async connect() { return {release(){}, async
  return {rows:[],rowCount:1};
  }}; }}}));
 import { saveObservation } from './browser-observation-writes';
-const observation={zpid:'123',url:'https://www.zillow.com/homedetails/123_zpid/',observedAt:new Date().toISOString(),price:500000,status:'Active' as const};
+const observation={zpid:'123',captureId:'11111111-1111-4111-8111-111111111111',url:'https://www.zillow.com/homedetails/123_zpid/',observedAt:new Date().toISOString(),price:500000,status:'Active' as const};
 beforeEach(()=>{process.env.BROWSER_OBSERVATION_DATABASE_URL='postgres://unused';state.queries=[];state.match=1;state.duplicate=false;state.currentCalls=0;});
 describe('observation transaction',()=>{
  it('locks, matches existing identity, appends history and projects before acknowledging',async()=>{expect(await saveObservation(observation)).toEqual({matched:true,zpid:'123',changedFields:['price']}); const q=state.queries.join('\n'); expect(q).toContain('pg_advisory_xact_lock');expect(q).toContain('INSERT INTO browser_observation_history');expect(q).toContain('INSERT INTO property_listing_events');expect(q).toContain('COMMIT');expect(q).not.toMatch(/UPDATE |DELETE /);});
