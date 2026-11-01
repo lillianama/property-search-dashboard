@@ -150,7 +150,7 @@ function mapHouseRow(row: HouseRow): HouseRecord {
  * last_seen_at freshness window when a date range is supplied. Backs the
  * dashboard before decision and lifecycle scoping. The tracked property
  * breakdown includes rejected properties and spans lifecycle panels; KPIs,
- * price distribution, map, table, and history exclude rejected properties.
+ * price distribution, map, and table exclude rejected properties.
  *
  * The STATUS filter is deliberately NOT applied here: statuses are resolved
  * from the full listing-event history in lib/status.ts (so explicit Pending
@@ -189,37 +189,32 @@ export interface RawListingEvent {
   price: number | null;
 }
 
-/**
- * Fetches monthly listing-event rows (event month + price) for exactly the
- * given properties, with event_date constrained by the date-range filter.
- * The caller passes the final filtered set (resolved-status filter applied,
- * rejected houses excluded), so the history chart always reflects the same
- * houses as the KPIs, map, and cards. This is intentionally the
- * tracked/researched dataset only, not full MLS inventory.
+/** Compatibility name: one current-price row per canonical property addition.
+ * IDs already reflect track, nondate filters and resolved statuses across all
+ * lifecycle panels, including Rejected. Dates constrain ingestion, not freshness.
  */
 export async function fetchMonthlyListingEvents(
   filters: HouseFilters,
   propertyIds: string[],
+  soldPropertyIds: string[] = [],
 ): Promise<RawListingEvent[]> {
   if (propertyIds.length === 0) return [];
-
   const sql = `
-    SELECT
-      to_char(date_trunc('month', e.event_date), 'YYYY-MM') AS month,
-      e.price AS price,
-      e.event_type AS "eventType"
-    FROM property_listing_events e
-    WHERE e.property_id = ANY($1::uuid[])
-      AND e.event_date IS NOT NULL
-      AND e.event_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Los_Angeles')::date
-      AND ($2::date IS NULL OR e.event_date >= $2::date)
-      AND ($3::date IS NULL OR e.event_date <= $3::date)
+    SELECT DISTINCT p.id,
+      to_char(p.created_at AT TIME ZONE 'America/Los_Angeles', 'YYYY-MM') AS month,
+      CASE WHEN p.id = ANY($4::uuid[]) AND pc.latest_sale_price > 0 THEN pc.latest_sale_price
+           WHEN pc.latest_price > 0 THEN pc.latest_price
+           WHEN pc.latest_sale_price > 0 THEN pc.latest_sale_price ELSE NULL END AS price
+    FROM property_records p
+    JOIN property_current pc ON pc.id = p.id
+    WHERE p.id = ANY($1::uuid[])
+      AND p.created_at <= CURRENT_TIMESTAMP
+      AND ($2::date IS NULL OR (p.created_at AT TIME ZONE 'America/Los_Angeles')::date >= $2::date)
+      AND ($3::date IS NULL OR (p.created_at AT TIME ZONE 'America/Los_Angeles')::date <= $3::date)
     ORDER BY month ASC
   `;
-  const params = [propertyIds, filters.dateFrom, filters.dateTo];
-
   return withReadOnlyClient(async (client) => {
-    const result = await client.query<RawListingEvent>(sql, params);
+    const result = await client.query<RawListingEvent>(sql, [[...new Set(propertyIds)], filters.dateFrom, filters.dateTo, [...new Set(soldPropertyIds)]]);
     return result.rows;
   });
 }

@@ -13,11 +13,11 @@ describe("historical record calendar views", () => {
     expect(view.buckets[11]).toEqual({ label: "Jan 2026", count: 1, medianPrice: null });
     expect(view.total).toBe(3);
   });
-  it("preserves 1985 with consecutive yearly spacing and zero years", () => {
+  it("preserves consecutive monthly spacing and medians in all history", () => {
     const view = buildHistoryView([point("1985-03"), point("1985-12", 2), point("2026-01")], true, now);
-    expect(view.buckets).toHaveLength(42);
-    expect(view.buckets[0]).toEqual({ label: "1985", count: 3, medianPrice: null });
-    expect(view.buckets[1]).toEqual({ label: "1986", count: 0, medianPrice: null });
+    expect(view.buckets).toHaveLength(491);
+    expect(view.buckets[0]).toEqual({ label: "Mar 1985", count: 1, medianPrice: null });
+    expect(view.buckets[1]).toEqual({ label: "Apr 1985", count: 0, medianPrice: null });
     expect(view.total).toBe(4);
   });
   it("keeps an empty recent window anchored to today even with only old data", () => {
@@ -45,9 +45,9 @@ describe("historical record calendar views", () => {
   });
 });
 
-it("keeps monthly sale prices and missing calendar months null, with no annual median of medians", () => {
+it("keeps monthly current cohort prices and null gaps in both views", () => {
   const data = [{ month: "2025-11", eventCount: 2, medianPrice: 400000 }, { month: "2026-01", eventCount: 1, medianPrice: 600000 }];
   const recent = buildHistoryView(data, false, now);
   expect(recent.buckets.slice(-3).map(b => b.medianPrice)).toEqual([400000, null, 600000]);
-  expect(buildHistoryView(data, true, now).buckets.every(b => b.medianPrice === null)).toBe(true);
+  expect(buildHistoryView(data, true, now).buckets.map(b => b.medianPrice)).toEqual([400000, null, 600000]);
 });

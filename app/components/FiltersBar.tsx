@@ -106,7 +106,7 @@ export function FiltersBar({ value, onChange, onApply, onReset, isDirty }: Filte
       </div>
 
       <p className="filters-hint">
-        Date range filters research freshness for the KPIs/table/map and listing-event dates for the history chart.
+        Date range filters research freshness for the KPIs/table/map and first dataset import dates for the additions chart.
       </p>
     </form>
   );

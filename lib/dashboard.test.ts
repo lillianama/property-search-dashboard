@@ -210,7 +210,7 @@ describe("buildDashboardResponse rejection exclusion", () => {
     expect(response.priceDistribution.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(1);
   });
 
-  it("passes only the surviving property ids to fetchMonthlyListingEvents so history excludes rejected houses", async () => {
+  it("passes all scoped canonical IDs to additions including Rejected", async () => {
     vi.mocked(fetchHouses).mockResolvedValue([house({ id: "prop-1" }), house({ id: "prop-2" })]);
     vi.mocked(fetchLatestDecisionRows).mockResolvedValue([
       { propertyId: "prop-2", verdict: "rejected", note: null, occurredAt: "2026-07-17T02:00:00Z" },
@@ -219,7 +219,7 @@ describe("buildDashboardResponse rejection exclusion", () => {
 
     await buildDashboardResponse(NO_FILTERS);
 
-    expect(fetchMonthlyListingEvents).toHaveBeenCalledWith(NO_FILTERS, ["prop-1"]);
+    expect(fetchMonthlyListingEvents).toHaveBeenCalledWith(NO_FILTERS, ["prop-1", "prop-2"], []);
   });
 
   it("restores a previously rejected house once a later decision supersedes the rejection", async () => {
@@ -455,7 +455,7 @@ describe("Plexes dashboard scope", () => {
     for (const fetchRows of [fetchLatestDecisionRows, fetchActualTaxRows, fetchPhotoSourceRows, fetchStatusEventRows, fetchNeighborhoodObservationRows]) {
       expect(fetchRows).toHaveBeenCalledWith(["exampleProperty"]);
     }
-    expect(fetchMonthlyListingEvents).toHaveBeenCalledWith(NO_FILTERS, ["exampleProperty"]);
+    expect(fetchMonthlyListingEvents).toHaveBeenCalledWith(NO_FILTERS, ["exampleProperty"], []);
     expect(fetchNeighborhoodZhviPoints).not.toHaveBeenCalled();
   });
 });
@@ -495,7 +495,7 @@ describe("lifecycle partitions preserve user state", () => {
     expect(pending.properties[0]).toMatchObject({ rankKey: "h", funnelBucket: "to-tour" });
     const sold = await buildDashboardResponse(NO_FILTERS, track, "sold");
     expect(sold.properties.map(h => h.id)).toEqual(["sold"]);
-    expect(fetchMonthlyListingEvents).toHaveBeenLastCalledWith(NO_FILTERS, ["sold"]);
+    expect(fetchMonthlyListingEvents).toHaveBeenLastCalledWith(NO_FILTERS, ["active", "pending", "sold", "rejected"], ["sold", "rejected"]);
     vi.mocked(fetchStatusEventRows).mockResolvedValue([...events, { propertyId: "sold", status: "Active", source: "zillow", eventDate: "2026-07-05", observedAt: "2026-07-05", id: 5 }]);
     const restored = await buildDashboardResponse(NO_FILTERS, track);
     expect(restored.properties.find(h => h.id === "sold")).toMatchObject({ rankKey: "j", funnelBucket: "top-contenders", backOnMarket: { source: "zillow" } });
@@ -527,7 +527,7 @@ describe("inactive lifecycle resolution", () => {
     expect(archived.properties.map(h => h.id)).toEqual(["inactive"]);
     expect(archived.properties[0]).toMatchObject({ displayStatus: "Inactive", rankKey: "k", funnelBucket: "top-contenders", judgments: inactive.judgments });
     expect(fetchHouses).toHaveBeenLastCalledWith(filters, track);
-    expect(fetchMonthlyListingEvents).toHaveBeenLastCalledWith(filters, ["inactive"]);
+    expect(fetchMonthlyListingEvents).toHaveBeenLastCalledWith(filters, ["inactive", "rejected"], []);
     vi.mocked(fetchStatusEventRows).mockResolvedValue([...events, { propertyId: "inactive", status: "Active", source: "rmls", id: 5, eventDate: "2026-07-05", observedAt: "2026-07-05" }]);
     expect((await buildDashboardResponse(NO_FILTERS, track)).properties[0]).toMatchObject({ id: "inactive", rankKey: "k", funnelBucket: "top-contenders", judgments: inactive.judgments });
     expect(inactive).toMatchObject({ displayStatus: "Active", rankKey: "k" });
@@ -561,7 +561,7 @@ describe.each(["house", "plex"] as const)("cross-panel status scope for %s", tra
       const ids = panel === "search" ? ["active", "unknown"] : [panel];
       expect(response.properties.map(h => h.id)).toEqual(ids);
       expect(response.summary.knownHouses).toBe(ids.length);
-      expect(fetchMonthlyListingEvents).toHaveBeenLastCalledWith(filters, ids);
+      expect(fetchMonthlyListingEvents).toHaveBeenLastCalledWith(filters, ["active", "pending", "sold", "unknown", ...["Active", "Pending", "Sold", "Inactive", "Unknown"].map(status => `rejected-${status}`)], ["sold", "rejected-Sold"]);
     }
     const selected = await buildDashboardResponse({ ...filters, statuses: ["Pending"] }, track);
     expect(selected.statusDistribution).toEqual([{ status: "Pending", count: 1 }, { status: "Rejected", count: 1 }]);
@@ -572,4 +572,26 @@ describe.each(["house", "plex"] as const)("cross-panel status scope for %s", tra
     }
     expect(selected.properties).toEqual([]);
   });
+});
+
+it.each(["house", "plex"] as const)("keeps %s addition cohorts independent of freshness and lifecycle while resolving status filters", async track => {
+  const filters = { ...NO_FILTERS, dateFrom: "2026-01-01", dateTo: "2026-02-28", statuses: ["Pending"], minBedrooms: 3 };
+  const old = house({ id: "old-import", latestStatus: "Inactive", displayStatus: "Inactive" });
+  vi.mocked(fetchHouses).mockImplementation(async (requested, requestedTrack) => {
+    expect(requestedTrack).toBe(track);
+    expect(requested.minBedrooms).toBe(3);
+    return requested.dateFrom ? [] : [old, house({ id: "active" })];
+  });
+  vi.mocked(fetchStatusEventRows).mockResolvedValue([
+    { propertyId: old.id, status: "Pending", source: "rmls", eventDate: "2026-01-01", observedAt: null, id: 1 },
+  ]);
+  vi.mocked(fetchMonthlyListingEvents).mockResolvedValue([{ month: "2026-01", price: null }]);
+  for (const panel of ["search", "pending", "sold"] as const) {
+    const response = await buildDashboardResponse(filters, track, panel);
+    expect(response.properties).toEqual([]);
+    expect(response.summary.knownHouses).toBe(0);
+    expect(response.history).toEqual([{ month: "2026-01", eventCount: 1, medianPrice: null }]);
+    expect(fetchMonthlyListingEvents).toHaveBeenLastCalledWith(filters, [old.id], []);
+    expect(fetchHouses).toHaveBeenCalledWith({ ...filters, dateFrom: null, dateTo: null }, track);
+  }
 });

@@ -75,7 +75,7 @@ function emptyDashboardResponse(dbAvailable: boolean, track: PropertyTrack): Das
  *
  * Rejected houses (an explicit human rejection decision was the latest
  * decision recorded for that property — see lib/rejection.ts) are excluded
- * from KPIs, history, price distribution, the map, and the table. The tracked
+ * from KPIs, price distribution, the map, and the table. The tracked
  * property breakdown includes them as a separate saved-decision category.
  * They still exist in the property store and remain visible
  * in the separate Rejected archive (lib/rejected.ts).
@@ -86,22 +86,27 @@ export async function buildDashboardResponse(filters: HouseFilters, track: Prope
   let events;
   let trackedTotals;
   try {
-    allHouses = await fetchHouses(filters, track);
+    const cohortHouses = await fetchHouses({ ...filters, dateFrom: null, dateTo: null }, track);
+    allHouses = filters.dateFrom || filters.dateTo ? await fetchHouses(filters, track) : cohortHouses;
 
     // Canonical status resolution over the full listing-event history (see
     // lib/status.ts). Fail closed if history is unavailable: a raw latest
     // availability signal must never restore an archived property.
-    const statusRows = await fetchStatusEventRows(allHouses.map((h) => h.id));
+    const statusRows = await fetchStatusEventRows([...new Set([...allHouses, ...cohortHouses].map((h) => h.id))]);
     const byProperty = new Map<string, typeof statusRows>();
     for (const row of statusRows) {
       const rows = byProperty.get(row.propertyId) ?? [];
       rows.push(row);
       byProperty.set(row.propertyId, rows);
     }
-    allHouses = allHouses.map(house => {
+    const resolveHouse = (house: HouseRecord) => {
       const rows = byProperty.get(house.id);
       return rows?.length ? { ...house, ...lifecycleFacts(rows) } : house;
-    });
+    };
+    allHouses = allHouses.map(resolveHouse);
+    const cohort = filterByDisplayStatus(cohortHouses.map(resolveHouse), filters.statuses);
+    const cohortIds = cohort.map(h => h.id);
+    const soldCohortIds = cohort.filter(h => h.displayStatus === "Sold").map(h => h.id);
 
     // The status filter applies to RESOLVED statuses, so a house rescued to
     // Pending matches the Pending chip instead of a stale Inactive.
@@ -117,7 +122,7 @@ export async function buildDashboardResponse(filters: HouseFilters, track: Prope
     statusDistribution.sort((a, b) => b.count - a.count || a.status.localeCompare(b.status));
     allHouses = filterLifecycle(active, lifecycleView);
     [events, trackedTotals] = await Promise.all([
-      fetchMonthlyListingEvents(filters, allHouses.map((h) => h.id)),
+      fetchMonthlyListingEvents(filters, cohortIds, soldCohortIds),
       fetchTrackedPropertyTotals(track),
     ]);
   } catch (err) {

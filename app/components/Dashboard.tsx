@@ -401,10 +401,10 @@ export function Dashboard({
               <KpiCards summary={data.summary} />
 
               <section className="dashboard-section">
-                <h2>Listing history for your researched {track === "plex" ? "plexes" : "homes"}</h2>
+                <h2>Properties added by month</h2>
                 <p className="section-note">
-                  Dates describe historical listing and sale records imported during research, not when tracking began.
-                  Counts reflect the homes matching your filters, not market inventory.
+                  Each property counts once, when first added to our dataset. Includes all panels, including Rejected,
+                  within this track and your filters. Older research imported together counts in its import month.
                 </p>
                 <HistoryChart data={data.history} />
               </section>

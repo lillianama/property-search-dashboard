@@ -42,8 +42,8 @@ export function median(values: Array<Nullish<number>>): number | null {
 
 /**
  * Normalizes property_records.first_seen_at into the canonical `dateAdded`
- * value: the moment the property entered the dashboard’s store (NOT the listing
- * date). Accepts either a string or the Date object node-postgres returns
+ * value used by existing table sorting: research provenance, which may predate
+ * ingestion. The addition chart separately uses created_at. Accepts either a string or the Date object node-postgres returns
  * for timestamptz columns. Returns a full ISO timestamp for deterministic
  * newest-first sorting, or null for missing/unparseable input — never a
  * guess.
@@ -148,18 +148,15 @@ export interface MonthlyBucket {
   medianPrice: number | null;
 }
 
-/** Groups listing events by their pre-computed calendar month into event
- * counts and median recorded sold-event price, sorted chronologically ascending. This backs the
- * "tracked/researched dataset" history chart, not full MLS inventory. */
+/** Groups canonical property additions by ingestion month with current cohort
+ * price medians. The query supplies one row per ID, independent of observations. */
 export function buildMonthlyHistory(events: ListingEventInput[]): MonthlyBucket[] {
   const byMonth = new Map<string, number[]>();
   for (const event of events) {
     if (!event.month) continue;
     const list = byMonth.get(event.month) ?? [];
     const price = safeNumber(event.price);
-    // Only explicit sold events carry the recorded sale-price contract.
-    // Status snapshots may retain asking prices even when marked Sold.
-    if (event.eventType === "sold" && price !== null && price > 0) list.push(price);
+    if (price !== null && price > 0) list.push(price);
     if (!byMonth.has(event.month)) byMonth.set(event.month, list);
   }
 

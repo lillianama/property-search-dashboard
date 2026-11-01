@@ -223,7 +223,7 @@ describe("summarizeStatusCounts", () => {
   });
 });
 
-it("counts every event but prices only explicit sold events with known positive prices", () => {
+it("counts every canonical addition and uses all known positive current cohort prices", () => {
   expect(buildMonthlyHistory([
     { month: "2026-01", eventType: "listed", price: 900000 },
     { month: "2026-01", eventType: "status", price: 800000 },
@@ -233,7 +233,7 @@ it("counts every event but prices only explicit sold events with known positive 
     { month: "2026-02", eventType: "sold", price: null },
     { month: "2026-02", eventType: "sold", price: 0 },
   ])).toEqual([
-    { month: "2026-01", eventCount: 5, medianPrice: 500000 },
+    { month: "2026-01", eventCount: 5, medianPrice: 700000 },
     { month: "2026-02", eventCount: 2, medianPrice: null },
   ]);
 });

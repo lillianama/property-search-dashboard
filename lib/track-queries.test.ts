@@ -55,11 +55,23 @@ it("reads only allowlisted lifecycle facts for the supplied track-scoped ids, in
   expect(sql).not.toMatch(/status IS NOT NULL|source_ref|\braw\b|SELECT \*/i);
 });
 
-it("uses historical event dates and excludes future days in Los Angeles before month aggregation", async () => {
-  await fetchMonthlyListingEvents(EMPTY_HOUSE_FILTERS, ["p"]);
+it("uses ingestion dates, distinct canonical IDs and current price fallback independently of observations", async () => {
+  await fetchMonthlyListingEvents({ ...EMPTY_HOUSE_FILTERS, dateFrom: "2026-01-01" }, ["p", "p"]);
   const [sql, params] = query.mock.calls[0];
-  expect(sql).toContain("date_trunc('month', e.event_date)");
-  expect(sql).toContain("e.event_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Los_Angeles')::date");
+  expect(sql).toContain("p.created_at AT TIME ZONE 'America/Los_Angeles'");
+  expect(sql).toContain("p.created_at <= CURRENT_TIMESTAMP");
   expect(sql).not.toMatch(/observed_at|first_seen_at|last_seen_at/);
-  expect(params).toEqual([["p"], null, null]);
+  expect(params).toEqual([["p"], "2026-01-01", null, []]);
+  expect(sql).toContain("SELECT DISTINCT p.id");
+  expect(sql).toContain("WHEN pc.latest_price > 0 THEN pc.latest_price");
+  expect(sql).toContain("WHEN pc.latest_sale_price > 0 THEN pc.latest_sale_price ELSE NULL");
+  expect(sql).not.toMatch(/property_listing_events|property_observations|event_date/);
+});
+
+it("prefers known sale prices only for resolved sold properties, with listing then sale fallback", async () => {
+  await fetchMonthlyListingEvents(EMPTY_HOUSE_FILTERS, ["active", "sold"], ["sold", "sold"]);
+  const [sql, params] = query.mock.calls[0];
+  expect(params[3]).toEqual(["sold"]);
+  expect(sql).toContain("CASE WHEN p.id = ANY($4::uuid[]) AND pc.latest_sale_price > 0 THEN pc.latest_sale_price");
+  expect(sql.indexOf("p.id = ANY($4")).toBeLessThan(sql.indexOf("WHEN pc.latest_price"));
 });
