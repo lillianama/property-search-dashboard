@@ -4,7 +4,7 @@ import type { PoolClient } from "pg";
 vi.mock("./db", () => ({ withReadOnlyClient: vi.fn() }));
 import { withReadOnlyClient } from "./db";
 import { EMPTY_HOUSE_FILTERS } from "./filters";
-import { fetchStatusEventRows, fetchActiveFunnelCollections, fetchEditorJudgmentRows, fetchEditorNoteRows, fetchHouses, fetchPropertyLocation, fetchTrackedPropertyTotals } from "./queries";
+import { fetchMonthlyListingEvents, fetchStatusEventRows, fetchActiveFunnelCollections, fetchEditorJudgmentRows, fetchEditorNoteRows, fetchHouses, fetchPropertyLocation, fetchTrackedPropertyTotals } from "./queries";
 import { trackUrl } from "./track";
 
 const query = vi.fn();
@@ -53,4 +53,13 @@ it("reads only allowlisted lifecycle facts for the supplied track-scoped ids, in
   expect(params).toEqual([["p"]]);
   expect(sql).toContain("property_id = ANY($1::uuid[])");
   expect(sql).not.toMatch(/status IS NOT NULL|source_ref|\braw\b|SELECT \*/i);
+});
+
+it("uses historical event dates and excludes future days in Los Angeles before month aggregation", async () => {
+  await fetchMonthlyListingEvents(EMPTY_HOUSE_FILTERS, ["p"]);
+  const [sql, params] = query.mock.calls[0];
+  expect(sql).toContain("date_trunc('month', e.event_date)");
+  expect(sql).toContain("e.event_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Los_Angeles')::date");
+  expect(sql).not.toMatch(/observed_at|first_seen_at|last_seen_at/);
+  expect(params).toEqual([["p"], null, null]);
 });

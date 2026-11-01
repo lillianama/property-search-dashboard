@@ -401,10 +401,10 @@ export function Dashboard({
               <KpiCards summary={data.summary} />
 
               <section className="dashboard-section">
-                <h2>Tracked listing activity over time</h2>
+                <h2>Listing history for your researched {track === "plex" ? "plexes" : "homes"}</h2>
                 <p className="section-note">
-                  Monthly count of listing events this dashboard has recorded, and their median price. This is the
-                  tracked/researched dataset, <strong>not</strong> full Portland MLS inventory.
+                  Dates describe historical listing and sale records imported during research, not when tracking began.
+                  Counts reflect the homes matching your filters, not market inventory.
                 </p>
                 <HistoryChart data={data.history} />
               </section>

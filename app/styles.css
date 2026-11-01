@@ -1879,3 +1879,37 @@ button:active:not(:disabled) { transform: translateY(0); }
 .plex-net-income-negative summary strong { color: #dc2626; }
 .plex-net-income-explanation { max-width: 38rem; }
 .plex-net-income-explanation small { display: block; }
+
+.history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.history-controls button {
+  background: var(--surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.history-controls button[aria-pressed="true"] {
+  background: #ede5fc;
+  color: #533173;
+  border-color: #a78bfa;
+}
+
+.history-controls button:focus-visible, .history-values summary:focus-visible {
+  outline: 2px solid #7952b3;
+  outline-offset: 3px;
+}
+
+.history-values {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-top: 12px;
+}

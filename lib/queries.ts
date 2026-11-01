@@ -208,6 +208,7 @@ export async function fetchMonthlyListingEvents(
     FROM property_listing_events e
     WHERE e.property_id = ANY($1::uuid[])
       AND e.event_date IS NOT NULL
+      AND e.event_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/Los_Angeles')::date
       AND ($2::date IS NULL OR e.event_date >= $2::date)
       AND ($3::date IS NULL OR e.event_date <= $3::date)
     ORDER BY month ASC
