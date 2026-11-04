@@ -82,13 +82,72 @@ describe("conservative comparable rent basis", () => {
     [[2500, 2600], [2000, 2500], 5100, 4500, "estimated", 4500],
     [[1000, 1200], [null, null], 2200, null, "actual", 2200],
     [[null, null], [2000, 2500], null, 4500, "estimated", 4500],
-    [[1000, null], [2000, 2500], null, 4500, "estimated", 4500],
+    [[1000, null], [2000, 2500], null, 4500, "mixed", 3500],
     [[0, 0], [2000, 2500], 0, 4500, "actual", 0],
     [[null, null], [null, null], null, null, null, null],
-  ] as const)("selects complete totals %#", (actuals, estimates, actualRent, estimatedRent, basis, rent) => {
+  ] as const)("selects supported rent per unit %#", (actuals, estimates, actualRent, estimatedRent, basis, rent) => {
     const result = plexNetIncome(make([...actuals], [...estimates]), piti);
     expect(result).toMatchObject({ actualRent, estimatedRent, basis, rent });
     expect(result.amount).toBe(rent === null ? null : rent - piti.monthlyTotal);
+  });
+  it("sums per-unit minima when actual and projected values cross", () => {
+    const result = plexNetIncome(make([1000, 3000], [2000, 2500]), piti);
+    expect(result).toMatchObject({ actualRent: 4000, estimatedRent: 4500, basis: "mixed", rent: 3500,
+      amount: 3500 - piti.monthlyTotal, unitSelections: [{ basis: "actual", rent: 1000 }, { basis: "estimated", rent: 2500 }] });
+  });
+  it("combines sole supported values even when neither whole-building source is complete", () => {
+    expect(plexNetIncome(make([1000, null], [null, 2500]), piti)).toMatchObject({
+      actualRent: null, estimatedRent: null, basis: "mixed", rent: 3500, amount: 3500 - piti.monthlyTotal,
+    });
+    expect(plexNetIncome(make([1000, null], [2000, null]), piti).rent).toBeNull();
+  });
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, "1850", undefined])(
+    "keeps invalid or missing rents unsupported: %s", invalid => {
+      const value = selectPlexUnits([row("unit_count", 2), row("unit_mix", [
+        { occupancy: "occupied", actualRent: 1000, expectedMonthlyRent: 2000 },
+        { occupancy: "occupied", actualRent: invalid, expectedMonthlyRent: invalid },
+      ])]).get("test")!;
+      expect(plexNetIncome(value, piti)).toMatchObject({ rent: null, basis: null, amount: null });
+      const html = renderToStaticMarkup(createElement(PlexNetIncome, { summary: value, piti }));
+      expect(html).toContain("Selected rent: Unknown / incomplete");
+    });
+  it("selects Emerson's vacant projection and occupied actual without fabricating zero", () => {
+    const id = "78fe41a5-cdc3-412b-9958-1f62d7e292f8";
+    const value = selectPlexUnits([
+      { ...row("unit_count", 2), property_id: id },
+      { ...row("unit_mix", [
+        { bedrooms: 2, bathrooms: 1, occupancy: "vacant", actualRent: null, expectedMonthlyRent: 1850 },
+        { bedrooms: 2, bathrooms: 1, occupancy: "occupied", actualRent: 1675, expectedMonthlyRent: 1850,
+          actualRentBasis: "RMLS unit table; listing-reported, not lease-verified" },
+      ]), property_id: id },
+    ]).get(id)!;
+    const before = structuredClone(value);
+    expect(plexNetIncome(value, piti)).toMatchObject({ actualRent: null, estimatedRent: 3700,
+      basis: "mixed", rent: 3525, amount: 3525 - piti.monthlyTotal });
+    const html = renderToStaticMarkup(createElement(PlexNetIncome, { summary: value, piti }));
+    expect(html).toContain("$3,525/mo mixed per-unit selected rent");
+    expect(html).toContain("Selected rent: $1,850/mo (estimated)");
+    expect(html).toContain("Selected rent: $1,675/mo (actual)");
+    expect(value).toEqual(before);
+    expect(value.units[0].actualMonthlyRent).toBeNull();
+  });
+  it.each(["vacant", "unknown"] as const)("uses projections for %s units with unsupported numeric actuals", occupancy => {
+    const value = make([0, 1200], [1850, 1850]);
+    value.units[0].occupancy = occupancy;
+    expect(plexNetIncome(value, piti)).toMatchObject({ actualRent: null, rent: 3050, basis: "mixed" });
+    value.units[0].expectedMonthlyRent = null;
+    expect(plexNetIncome(value, piti).rent).toBeNull();
+  });
+  it("rejects unsupported actuals per unit while retaining another unit's actual and provenance", () => {
+    const value = make([0, 1200], [1850, null]);
+    value.units[0].actualRentBasis = "Historical whole-building rent; no supported allocation";
+    const before = structuredClone(value);
+    expect(plexNetIncome(value, piti)).toMatchObject({ actualRent: null, estimatedRent: null, rent: 3050, basis: "mixed" });
+    const html = renderToStaticMarkup(createElement(PlexNetIncome, { summary: value, piti }));
+    expect(html).toContain(value.units[0].actualRentBasis);
+    expect(html).toContain("Projected per documented unit");
+    expect(html).toContain("enriched-source");
+    expect(value).toEqual(before);
   });
   it.each(["Projected rent", "proforma", "pro-forma", "historical annual rent", "unknown scope", "No supported allocation"])(
     "rejects explicit incompatible actual basis %s", actualRentBasis => {
@@ -106,10 +165,14 @@ describe("conservative comparable rent basis", () => {
   it("explains source provenance, comparison, scope and exclusions", () => {
     const value = make([1000, null], [2000, 2500]);
     const html = renderToStaticMarkup(createElement(PlexNetIncome, { summary: value, piti }));
-    expect(html).toContain("lower of complete comparable whole-property");
+    expect(html).toContain("lower of supported actual and projected monthly rent");
     expect(html).toContain("not lease-verified collection");
     expect(html).toContain("Unknown / incomplete or noncomparable scope");
     expect(html).toContain("$4,500/mo");
+    expect(html).toContain("$3,500/mo mixed per-unit selected rent");
+    expect(html).toContain("mixed (actual and estimated per unit)");
+    expect(html).toContain("Selected rent: $1,000/mo (actual)");
+    expect(html).toContain("Selected rent: $2,500/mo (estimated)");
     expect(html).toContain("all units before owner occupancy");
     expect(html).toContain("RentCast long-term AVM");
     expect(html).toContain("RMLS unit table");
