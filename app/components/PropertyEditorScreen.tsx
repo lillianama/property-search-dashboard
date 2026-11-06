@@ -115,7 +115,7 @@ export function PropertyEditorScreen({
   const [loadedMarketPrice, setLoadedMarketPrice] = useState<number | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
-  const firstFieldRef = useRef<HTMLTextAreaElement | null>(null);
+  const firstFieldRef = useRef<HTMLInputElement | null>(null);
 
   const dirty =
     draft.purchasePrice !== saved.purchasePrice ||
@@ -268,7 +268,7 @@ export function PropertyEditorScreen({
               <p>Current market price: {formatCurrency(loadedMarketPrice)}</p>
               <label className="editor-field">
                 <span className="editor-field-label">Purchase price override (optional)</span>
-                <input className="editor-price-input" type="number" min="0.01" max="1000000000" step="0.01" value={draft.purchasePrice}
+                <input ref={firstFieldRef} className="editor-price-input" type="number" min="0.01" max="1000000000" step="0.01" value={draft.purchasePrice}
                   disabled={savePhase === "saving"}
                   onChange={(event) => { setDraft((prev) => ({ ...prev, purchasePrice: event.target.value })); setSavePhase("idle"); }} />
               </label>
@@ -315,12 +315,11 @@ export function PropertyEditorScreen({
             </div>
 
             <div className="editor-fields">
-              {EDITOR_FIELDS.map((field, index) => (
+              {EDITOR_FIELDS.map((field) => (
                 <label key={field} className="editor-field">
                   <span className="editor-field-label">{FIELD_LABELS[field]}</span>
                   <span className="editor-field-hint">{FIELD_HINTS[field]}</span>
                   <textarea
-                    ref={index === 0 ? firstFieldRef : undefined}
                     className="editor-textarea"
                     rows={field === "remarks" ? 6 : 4}
                     maxLength={MAX_FIELD_LENGTH}
