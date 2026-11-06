@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FunnelBoard } from "../app/components/FunnelBoard";
 import { PlexNetIncome } from "../app/components/PlexNetIncome";
 import { TrackContext } from "../app/components/TrackContext";
+import { formatCurrency } from "./format";
 import { computePiti, DEFAULT_PITI_ASSUMPTIONS } from "./piti";
 import { plexNetIncome } from "./plex-net-income";
 import { selectPlexUnits, type UnitSourceRow } from "./plex-units";
@@ -60,6 +61,14 @@ describe("whole-building estimated net income", () => {
       latestPrice: 500000, annualTaxAmount: 6000, bedroomSizeFlag: "unknown", judgments: {}, plexUnits: summary() } as HouseRecord;
     const render = (track: "house" | "plex", property = house) => renderToStaticMarkup(createElement(TrackContext.Provider, { value: track },
       createElement(FunnelBoard, { properties: [property], placements: {}, onMove: vi.fn(), onEditNotes: vi.fn(), onWatchlistTop: vi.fn(), onWatchlistBottom: vi.fn(), pitiAssumptions: DEFAULT_PITI_ASSUMPTIONS })));
+    const overridePiti = computePiti({ price: 490000, actualAnnualTax: 6000 }, DEFAULT_PITI_ASSUMPTIONS)!;
+    const overrideHtml = render("plex", { ...house, purchasePriceOverride: 490000 });
+    expect(overrideHtml).toContain("Purchase-price override active");
+    expect(overrideHtml).toContain("Est. net income (purchase-price override)");
+    expect(overrideHtml).toContain(`${formatCurrency(4500 - overridePiti.monthlyTotal)}/mo`);
+    expect(overrideHtml).toContain("Purchase price: $490,000");
+    expect(overrideHtml).toContain("Loan: $465,500");
+    expect(overrideHtml).toContain("$500,000"); // market price label remains independent
     const html = render("plex");
     const meta = html.slice(html.indexOf('class="funnel-row-line funnel-row-meta"'));
     expect(meta).toMatch(/^class="funnel-row-line funnel-row-meta"><details class="piti-details"[\s\S]*?<\/details><details class="plex-net-income /);

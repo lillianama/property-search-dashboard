@@ -43,10 +43,10 @@ describe("computePiti", () => {
     expect(computePiti({ price: Number.NaN, actualAnnualTax: null }, assumptions())).toBeNull();
   });
 
-  it("mirrors the finance comparison: 5% down, 30-yr, 7.25% note rate, $1,200/yr insurance, 0.36% PMI", () => {
+  it("mirrors the finance comparison: 5% down, 30-yr, 7.00% note rate, $1,200/yr insurance, 0.36% PMI", () => {
     // Default-style example on a $500,000 price with a $4,195 actual tax:
     //   down 5%           = $25,000; base loan = $475,000
-    //   P&I  PMT(7.25%/12, 360, 475000)      = $3,240.34 → $3,240
+    //   P&I  PMT(7.00%/12, 360, 475000)      = $3,160.19 → $3,160
     //   tax  4195 / 12                      = $349.58   → $350
     //   ins  1200 / 12                      = $100
     //   PMI  475000 × 0.36% / 12            = $142.50   → $143 (5% < 20% down)
@@ -54,12 +54,12 @@ describe("computePiti", () => {
     expect(piti.taxIncluded).toBe(true);
     expect(piti.downPaymentAmount).toBe(25000);
     expect(piti.loanAmount).toBe(475000);
-    expect(piti.monthlyPrincipalAndInterest).toBe(3240);
+    expect(piti.monthlyPrincipalAndInterest).toBe(3160);
     expect(piti.monthlyPropertyTax).toBe(350);
     expect(piti.monthlyInsurance).toBe(100);
     expect(piti.pmiApplied).toBe(true);
     expect(piti.monthlyPmi).toBe(143);
-    expect(piti.monthlyTotal).toBe(3240 + 350 + 100 + 143);
+    expect(piti.monthlyTotal).toBe(3160 + 350 + 100 + 143);
   });
 
   it("uses the note rate directly in the PMT formula (never an APR)", () => {
@@ -91,7 +91,7 @@ describe("computePiti", () => {
     expect(below.pmiApplied).toBe(true);
     expect(below.loanAmount).toBe(450000);
     expect(below.monthlyPmi).toBe(135); // 450000 × 0.36% / 12
-    expect(below.monthlyPrincipalAndInterest).toBe(3070); // PMT(7.25%/12, 360, 450000)
+    expect(below.monthlyPrincipalAndInterest).toBe(2994); // PMT(7.00%/12, 360, 450000)
 
     const at20 = computePiti({ price: 500000, actualAnnualTax: 4195 }, assumptions({ downPaymentPct: 20 }))!;
     expect(at20.pmiApplied).toBe(false);
@@ -158,7 +158,7 @@ describe("clampAssumptionValue / parseStoredAssumptions", () => {
     expect(clampAssumptionValue("downPaymentPct", 150)).toBe(100);
     expect(clampAssumptionValue("downPaymentPct", -5)).toBe(0);
     expect(clampAssumptionValue("termYears", 0)).toBe(1);
-    expect(clampAssumptionValue("interestRatePct", Number.NaN)).toBe(7.25);
+    expect(clampAssumptionValue("interestRatePct", Number.NaN)).toBe(7.00);
   });
 
   it("returns defaults for missing, corrupt, or non-object storage payloads", () => {
@@ -214,7 +214,7 @@ describe("stored-assumption versioning (v1 → v2 comparison migration)", () => 
     });
     const parsed = parseStoredAssumptions(legacy);
     expect(parsed.downPaymentPct).toBe(5);
-    expect(parsed.interestRatePct).toBe(7.25);
+    expect(parsed.interestRatePct).toBe(7.00);
     expect(parsed.pmiAnnualRatePct).toBe(0.36);
     expect(parsed.insuranceMode).toBe("annualAmount");
     expect(parsed.insuranceAnnualAmount).toBe(1200);
@@ -231,7 +231,7 @@ describe("stored-assumption versioning (v1 → v2 comparison migration)", () => 
     });
     const parsed = parseStoredAssumptions(legacy);
     expect(parsed.downPaymentPct).toBe(12);
-    expect(parsed.interestRatePct).toBe(7.25);
+    expect(parsed.interestRatePct).toBe(7.00);
     expect(parsed.termYears).toBe(15);
     expect(parsed.insuranceMode).toBe("monthlyAmount");
     expect(parsed.insuranceMonthlyAmount).toBe(175);
@@ -248,7 +248,7 @@ describe("stored-assumption versioning (v1 → v2 comparison migration)", () => 
 
   it("refreshes the old v2 comparison rate while retaining other custom settings", () => {
     const parsed = parseStoredAssumptions(JSON.stringify({ version: 2, interestRatePct: 6.5, downPaymentPct: 12, insuranceAnnualAmount: 1800 }));
-    expect(parsed.interestRatePct).toBe(7.25);
+    expect(parsed.interestRatePct).toBe(7.00);
     expect(parsed.downPaymentPct).toBe(12);
     expect(parsed.insuranceAnnualAmount).toBe(1800);
   });

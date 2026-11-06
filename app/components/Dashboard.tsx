@@ -495,6 +495,7 @@ export function Dashboard({
           {editingId && (
             <PropertyEditorScreen
               propertyId={editingId}
+              marketPrice={editingHouse?.latestPrice}
               address={editingHouse?.address ?? "Tracked property"}
               onClose={onCloseEditor}
               onSaved={handleEditorSaved}

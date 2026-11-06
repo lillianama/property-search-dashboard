@@ -3,12 +3,12 @@ import type { PitiBreakdown } from "../../lib/piti";
 import { plexNetIncome } from "../../lib/plex-net-income";
 import type { PlexUnitSummary } from "../../lib/plex-units";
 
-export function PlexNetIncome({ summary, piti }: { summary?: PlexUnitSummary; piti: PitiBreakdown | null }) {
+export function PlexNetIncome({ summary, piti, overrideActive = false }: { overrideActive?: boolean; summary?: PlexUnitSummary; piti: PitiBreakdown | null }) {
   const { actualRent, estimatedRent, basis, rent, amount, reason, unitSelections } = plexNetIncome(summary, piti);
   const tone = amount === null || amount === 0 ? "neutral" : amount > 0 ? "positive" : "negative";
   return <details className={`plex-net-income plex-net-income-${tone}`}>
     <summary>
-      <span>Est. net income</span>{" "}
+      <span>Est. net income{overrideActive ? " (purchase-price override)" : ""}</span>{" "}
       <strong>{amount === null ? "Unknown / incomplete" : `${amount > 0 ? "+" : amount < 0 ? "−" : ""}${formatCurrency(Math.abs(amount))}/mo`}</strong>
     </summary>
     <div className="plex-net-income-explanation">

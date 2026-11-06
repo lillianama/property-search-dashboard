@@ -19,7 +19,7 @@
 // ── Assumptions ──────────────────────────────────────────────────────────────
 //
 // Default comparison assumptions:
-//   5% down (95% LTV) · 30-year fixed · 7.25% MORTGAGE NOTE RATE for P&I
+//   5% down (95% LTV) · 30-year fixed · 7.00% MORTGAGE NOTE RATE for P&I
 //   (this is the note rate, NOT APR — the comparison's APR is a separate
 //   disclosure figure and is never used for the monthly payment) ·
 //   $1,200/year homeowners insurance · PMI = base loan × 0.36% / yr ÷ 12.
@@ -50,7 +50,7 @@ export interface PitiAssumptions {
 
 export const DEFAULT_PITI_ASSUMPTIONS: PitiAssumptions = {
   downPaymentPct: 5,
-  interestRatePct: 7.25,
+  interestRatePct: 7.00,
   termYears: 30,
   insuranceMode: "annualAmount",
   insuranceAnnualAmount: 1200,
@@ -91,9 +91,9 @@ function isInsuranceMode(value: unknown): value is InsuranceMode {
 // touched it, so it should track the current methodology — while any value
 // that differs from the old default was genuinely customized and is kept
 // verbatim. v2 payloads migrate only the old 6.5% comparison rate;
-// v3 payloads are read field-by-field without migration.
+// v3 payloads migrate the previous untouched 7.25% rate; v4 preserves saved values.
 
-export const PITI_SETTINGS_VERSION = 3;
+export const PITI_SETTINGS_VERSION = 4;
 
 /** The v1 defaults, kept only so migration can tell "untouched" from
  * "customized". Never used for new estimates. */
@@ -147,6 +147,7 @@ export function parseStoredAssumptions(raw: string | null | undefined): PitiAssu
     }
     // Refresh the previous comparison rate without resetting other saved settings.
     if (isPreviousComparison && field === "interestRatePct" && value === 6.5) continue;
+    if (record.version === 3 && field === "interestRatePct" && value === 7.25) continue;
     result[field] = clampAssumptionValue(field, value);
   }
 

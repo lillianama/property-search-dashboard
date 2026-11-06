@@ -54,6 +54,7 @@ export interface HouseRecord {
   finishedSqft: number | null;
   yearBuilt: number | null;
   latestPrice: number | null;
+  purchasePriceOverride?: number | null;
   /** Raw latest status string from property_current (latest status-bearing
    * listing event). Kept for transparency; UI should render displayStatus. */
   latestStatus: string | null;

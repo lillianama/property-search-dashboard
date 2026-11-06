@@ -11,6 +11,7 @@
 // row per changed field and the current value is simply the latest
 // revision, so the full edit history survives with provenance.
 
+import { validPurchasePrice } from "./purchase-price";
 import type { QuickJudgments, TriStateJudgment } from "./types";
 import { UNKNOWN_JUDGMENTS } from "./types";
 
@@ -64,6 +65,8 @@ export interface EditorFieldState {
  * note fields plus the three tri-state judgments, nothing else. Fields
  * never edited are null; judgments never evaluated are "unknown". */
 export interface EditorNotes {
+  purchasePriceOverride?: number | null;
+  marketPrice?: number | null;
   remarks: EditorFieldState | null;
   pros: EditorFieldState | null;
   cons: EditorFieldState | null;
@@ -105,6 +108,7 @@ export function splitEntries(value: string): string[] {
 // ── Request validation (used by the narrow mutation endpoint) ────────────────
 
 export interface EditorSaveRequest {
+  purchasePriceOverride?: number | null;
   /** Only the fields present in the body; each already normalized. An
    * empty string means "clear this field" (recorded as a revision). */
   fields: Partial<Record<EditorField, string>>;
@@ -154,13 +158,17 @@ export function parseEditorSaveRequest(body: unknown): ParsedEditorSaveRequest {
     judgments[field] = value;
   }
 
-  if (Object.keys(fields).length === 0 && Object.keys(judgments).length === 0) {
+  const hasPrice = Object.prototype.hasOwnProperty.call(record, "purchasePriceOverride");
+  if (hasPrice && !validPurchasePrice(record.purchasePriceOverride)) {
+    return { ok: false, error: "purchasePriceOverride must be null or a positive price up to 1,000,000,000 with at most two decimal places" };
+  }
+  if (!hasPrice && Object.keys(fields).length === 0 && Object.keys(judgments).length === 0) {
     return {
       ok: false,
-      error: "at least one of remarks, pros, cons, bedroomSizeOk, rentalIncome, drumSpace must be provided",
+      error: "at least one editor field or purchasePriceOverride must be provided",
     };
   }
-  return { ok: true, request: { fields, judgments } };
+  return { ok: true, request: { fields, judgments, ...(hasPrice ? { purchasePriceOverride: record.purchasePriceOverride as number | null } : {}) } };
 }
 
 // ── Applying a confirmed save to already-loaded house rows ───────────────────
@@ -175,7 +183,7 @@ export function parseEditorSaveRequest(body: unknown): ParsedEditorSaveRequest {
  * property id returns the input array unchanged (identity), so memoized
  * children don't re-render needlessly.
  */
-export function applyEditorSaveToHouses<T extends { id: string; judgments: QuickJudgments }>(
+export function applyEditorSaveToHouses<T extends { id: string; judgments: QuickJudgments; purchasePriceOverride?: number | null; latestPrice?: number | null }>(
   houses: T[],
   propertyId: string,
   notes: EditorNotes,
@@ -188,12 +196,14 @@ export function applyEditorSaveToHouses<T extends { id: string; judgments: Quick
   if (
     j.bedroomSizeOk === next.bedroomSizeOk &&
     j.rentalIncome === next.rentalIncome &&
-    j.drumSpace === next.drumSpace
+    j.drumSpace === next.drumSpace &&
+    (notes.purchasePriceOverride === undefined || (house.purchasePriceOverride ?? null) === notes.purchasePriceOverride) &&
+    (notes.marketPrice === undefined || house.latestPrice === notes.marketPrice)
   ) {
     return houses;
   }
   const updated = houses.slice();
-  updated[index] = { ...house, judgments: { ...next } };
+  updated[index] = { ...house, judgments: { ...next }, ...(notes.purchasePriceOverride !== undefined ? { purchasePriceOverride: notes.purchasePriceOverride } : {}), ...(notes.marketPrice !== undefined ? { latestPrice: notes.marketPrice } : {}) };
   return updated;
 }
 

@@ -10,6 +10,7 @@ vi.mock("./db", () => ({
 }));
 vi.mock("./queries", () => ({
   fetchEditorNoteRows: vi.fn(),
+  fetchEditorPricing: vi.fn().mockResolvedValue({marketPrice: 500000, purchasePriceOverride: null}),
   fetchEditorJudgmentRows: vi.fn(),
 }));
 vi.mock("./editor-writes", () => ({
@@ -71,7 +72,7 @@ describe("GET /api/editor/[id]", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     const json = (await res.json()) as { notes: Record<string, unknown> };
-    expect(Object.keys(json.notes).sort()).toEqual(["cons", "judgments", "pros", "remarks"]);
+    expect(Object.keys(json.notes).sort()).toEqual(["cons", "judgments", "marketPrice", "pros", "purchasePriceOverride", "remarks"]);
     expect(json.notes.remarks).toEqual({ value: "my remarks", savedAt: "2026-07-18T00:00:00Z" });
     expect(json.notes.judgments).toEqual({
       bedroomSizeOk: "unknown",

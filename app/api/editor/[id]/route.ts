@@ -4,7 +4,7 @@ import { DatabaseUnavailableError } from "../../../../lib/db";
 import { parseEditorSaveRequest, selectCurrentJudgments, selectCurrentNotes } from "../../../../lib/editor";
 import { executeEditorSave } from "../../../../lib/editor-writes";
 import { isSameOriginRequest, isValidUuid } from "../../../../lib/funnel";
-import { fetchEditorJudgmentRows, fetchEditorNoteRows } from "../../../../lib/queries";
+import { fetchEditorPricing, fetchEditorJudgmentRows, fetchEditorNoteRows } from "../../../../lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +37,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     } catch (err) {
       console.error("[api/editor] judgments read failure:", err instanceof Error ? err.message : err);
     }
+    Object.assign(notes, await fetchEditorPricing(id.toLowerCase(), parseTrack(new URL(request.url).searchParams.get("track"))));
     return Response.json({ notes }, { headers: NO_STORE_HEADERS });
   } catch (err) {
     if (err instanceof DatabaseUnavailableError) {
@@ -82,6 +83,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!outcome.ok) {
       return Response.json({ error: "unknown property" }, { status: 404, headers: NO_STORE_HEADERS });
     }
+    Object.assign(outcome.notes, await fetchEditorPricing(id.toLowerCase(), parseTrack(new URL(request.url).searchParams.get("track"))));
     return Response.json(
       { ok: true, changedFields: outcome.changedFields, notes: outcome.notes },
       { headers: NO_STORE_HEADERS },

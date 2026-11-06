@@ -40,6 +40,7 @@ const HOUSE_BASE_CTE = `
     ${safeNumeric("pc.finished_sqft")} AS finished_sqft,
     ${safeNumeric("pc.year_built")} AS year_built,
     CASE WHEN lower(coalesce(pc.latest_status,'')) IN ('sold','closed','off market','off-market','for rent','inactive','withdrawn','expired','cancelled','canceled','delisted','removed') THEN NULL ELSE pc.latest_price END AS latest_price,
+    (SELECT s.purchase_price FROM property_purchase_price_settings s WHERE s.property_id = pc.id ORDER BY s.saved_at DESC, s.id DESC LIMIT 1) AS purchase_price_override,
     pc.latest_status AS latest_status,
     pc.latest_sale_price AS latest_sale_price,
     pc.latest_sale_date AS latest_sale_date,
@@ -73,6 +74,7 @@ interface HouseRow {
   finished_sqft: string | null;
   year_built: string | null;
   latest_price: number | null;
+  purchase_price_override: number | null;
   latest_status: string | null;
   latest_sale_price: number | null;
   latest_sale_date: string | null;
@@ -134,6 +136,7 @@ function mapHouseRow(row: HouseRow): HouseRecord {
     finishedSqft: toNumberOrNull(row.finished_sqft),
     yearBuilt: toNumberOrNull(row.year_built),
     latestPrice: toNumberOrNull(row.latest_price),
+    purchasePriceOverride: toNumberOrNull(row.purchase_price_override ?? null),
     latestStatus: row.latest_status,
     latestSalePrice: toNumberOrNull(row.latest_sale_price),
     latestSaleDate: row.latest_sale_date,
@@ -723,5 +726,16 @@ export async function fetchTrackedPropertyTotals(track: PropertyTrack = "house")
       houseTotal: Number(row?.house_total ?? "0"),
       storeTotal: Number(row?.store_total ?? "0"),
     };
+  });
+}
+
+export async function fetchEditorPricing(propertyId: string, track: PropertyTrack = "house") {
+  return withReadOnlyClient(async (client) => {
+    const result = await client.query(`SELECT
+      CASE WHEN lower(coalesce(pc.latest_status,'')) IN ('sold','closed','off market','off-market','for rent','inactive','withdrawn','expired','cancelled','canceled','delisted','removed') THEN NULL ELSE pc.latest_price END AS market_price,
+      (SELECT s.purchase_price FROM property_purchase_price_settings s WHERE s.property_id = pc.id ORDER BY s.saved_at DESC, s.id DESC LIMIT 1) AS purchase_price
+      FROM property_current pc WHERE pc.id = $1::uuid AND pc.track = $2`, [propertyId, track]);
+    const row = result.rows[0];
+    return row ? { marketPrice: toNumberOrNull(row.market_price), purchasePriceOverride: toNumberOrNull(row.purchase_price) } : null;
   });
 }

@@ -12,7 +12,8 @@ import {
   type EditorNotes,
   type JudgmentField,
 } from "../../lib/editor";
-import { formatDate } from "../../lib/format";
+import { validPurchasePrice } from "../../lib/purchase-price";
+import { formatCurrency, formatDate } from "../../lib/format";
 import type { TriStateJudgment } from "../../lib/types";
 
 const FIELD_LABELS: Record<EditorField, string> = {
@@ -50,6 +51,7 @@ type LoadPhase = "loading" | "ready" | "error";
 type SavePhase = "idle" | "saving" | "saved" | "error";
 
 interface Draft {
+  purchasePrice: string;
   remarks: string;
   pros: string;
   cons: string;
@@ -59,6 +61,7 @@ interface Draft {
 }
 
 const EMPTY_DRAFT: Draft = {
+  purchasePrice: "",
   remarks: "",
   pros: "",
   cons: "",
@@ -69,6 +72,7 @@ const EMPTY_DRAFT: Draft = {
 
 function draftFromNotes(notes: EditorNotes): Draft {
   return {
+    purchasePrice: notes.purchasePriceOverride == null ? "" : String(notes.purchasePriceOverride),
     remarks: notes.remarks?.value ?? "",
     pros: notes.pros?.value ?? "",
     cons: notes.cons?.value ?? "",
@@ -88,11 +92,13 @@ function draftFromNotes(notes: EditorNotes): Draft {
 export function PropertyEditorScreen({
   propertyId,
   address,
+  marketPrice,
   onClose,
   onSaved,
 }: {
   propertyId: string;
   address: string;
+  marketPrice?: number | null;
   onClose: () => void;
   /** Called with the server-confirmed notes after every SUCCESSFUL save so
    * the parent view can update its rows (judgment pills, etc.) immediately
@@ -106,11 +112,13 @@ export function PropertyEditorScreen({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [saved, setSaved] = useState<Draft>(EMPTY_DRAFT);
+  const [loadedMarketPrice, setLoadedMarketPrice] = useState<number | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const firstFieldRef = useRef<HTMLTextAreaElement | null>(null);
 
   const dirty =
+    draft.purchasePrice !== saved.purchasePrice ||
     draft.remarks !== saved.remarks ||
     draft.pros !== saved.pros ||
     draft.cons !== saved.cons ||
@@ -130,6 +138,8 @@ export function PropertyEditorScreen({
     onClose();
   }, [onClose]);
 
+  useEffect(() => { setLoadedMarketPrice(marketPrice ?? null); }, [marketPrice]);
+
   // Load the current notes once per property.
   useEffect(() => {
     const controller = new AbortController();
@@ -143,6 +153,7 @@ export function PropertyEditorScreen({
         if (!res.ok) throw new Error(`request failed with status ${res.status}`);
         const json = (await res.json()) as { notes: EditorNotes };
         const loaded = draftFromNotes(json.notes);
+        setLoadedMarketPrice(json.notes.marketPrice ?? null);
         setDraft(loaded);
         setSaved(loaded);
         setSavedAt(
@@ -183,7 +194,9 @@ export function PropertyEditorScreen({
     }
   };
 
-  const save = async () => {
+  const save = async (useMarket = false) => {
+    const price = useMarket || draft.purchasePrice.trim() === "" ? null : Number(draft.purchasePrice);
+    if (!validPurchasePrice(price)) { setSavePhase("error"); setSaveError("Enter a positive purchase price with at most two decimal places"); return; }
     setSavePhase("saving");
     setSaveError(null);
     try {
@@ -191,6 +204,7 @@ export function PropertyEditorScreen({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          ...((useMarket || draft.purchasePrice !== saved.purchasePrice) ? { purchasePriceOverride: price } : {}),
           remarks: draft.remarks,
           pros: draft.pros,
           cons: draft.cons,
@@ -205,6 +219,7 @@ export function PropertyEditorScreen({
       }
       const json = (await res.json()) as { notes: EditorNotes };
       const persisted = draftFromNotes(json.notes);
+      setLoadedMarketPrice(json.notes.marketPrice ?? null);
       setDraft(persisted);
       setSaved(persisted);
       setSavedAt(new Date().toISOString());
@@ -249,6 +264,18 @@ export function PropertyEditorScreen({
 
         {loadPhase === "ready" && (
           <>
+            <div className="editor-fields">
+              <p>Current market price: {formatCurrency(loadedMarketPrice)}</p>
+              <label className="editor-field">
+                <span className="editor-field-label">Purchase price override (optional)</span>
+                <input className="editor-price-input" type="number" min="0.01" max="1000000000" step="0.01" value={draft.purchasePrice}
+                  disabled={savePhase === "saving"}
+                  onChange={(event) => { setDraft((prev) => ({ ...prev, purchasePrice: event.target.value })); setSavePhase("idle"); }} />
+              </label>
+              <p className="editor-field-hint">Shared across browsers. Zillow continues updating the market price. Blank uses the latest market price.</p>
+              {saved.purchasePrice !== "" && <p>Purchase-price override active on financing and net income calculations.</p>}
+              <button type="button" className="btn-secondary" disabled={savePhase === "saving" || (draft.purchasePrice === "" && saved.purchasePrice === "")} onClick={() => save(true)}>Use market price</button>
+            </div>
             <div className="editor-judgments">
               <p className="editor-judgments-title">Quick judgments</p>
               <p className="editor-field-hint">
@@ -324,10 +351,10 @@ export function PropertyEditorScreen({
                 <button
                   type="button"
                   className="btn-primary"
-                  onClick={save}
+                  onClick={() => save()}
                   disabled={savePhase === "saving" || !dirty}
                 >
-                  {savePhase === "saving" ? "Saving\u2026" : "Save notes"}
+                  {savePhase === "saving" ? "Saving\u2026" : "Save changes"}
                 </button>
                 <button type="button" className="btn-secondary" onClick={requestClose}>
                   {dirty ? "Discard & close" : "Close"}

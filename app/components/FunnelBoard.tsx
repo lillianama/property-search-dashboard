@@ -14,6 +14,7 @@ import {
   type LocalPlacement,
 } from "../../lib/funnel";
 import { formatCurrency, formatDate, formatNumber, formatYear } from "../../lib/format";
+import { effectivePurchasePrice } from "../../lib/purchase-price";
 import { computePiti, type PitiAssumptions } from "../../lib/piti";
 import type { FunnelBucket, HouseRecord, QuickJudgments, TriStateJudgment } from "../../lib/types";
 import { PlexUnits } from "./PlexUnits";
@@ -485,7 +486,7 @@ function describeTaxProvenance(house: HouseRecord): string {
  * an estimate. */
 function PitiEstimate({ house, assumptions }: { house: HouseRecord; assumptions: PitiAssumptions }) {
   const piti = computePiti(
-    { price: house.latestPrice, actualAnnualTax: house.annualTaxAmount },
+    { price: effectivePurchasePrice(house), actualAnnualTax: house.annualTaxAmount },
     assumptions,
   );
 
@@ -503,6 +504,7 @@ function PitiEstimate({ house, assumptions }: { house: HouseRecord; assumptions:
             : `PITI incomplete for ${house.address} (property tax unavailable)`
         }
       >
+        {house.purchasePriceOverride != null && <span className="piti-hint">Purchase-price override active</span>}
         <span className="piti-label">{piti.taxIncluded ? "Est. PITI" : "PITI incomplete"}</span>
         <span className="piti-total">{formatCurrency(piti.monthlyTotal)}/mo</span>
         <span className="piti-hint">
@@ -517,6 +519,7 @@ function PitiEstimate({ house, assumptions }: { house: HouseRecord; assumptions:
             {piti.pmiApplied ? " + PMI" : ""} only.
           </p>
         )}
+        <p>Purchase price: {formatCurrency(effectivePurchasePrice(house))} · Loan: {formatCurrency(piti.loanAmount)}</p>
         <dl className="piti-lines">
           <div>
             <dt>Principal &amp; interest</dt>
@@ -720,8 +723,8 @@ function FunnelRow({
 
         <div className="funnel-row-line funnel-row-meta">
           <PitiEstimate house={house} assumptions={pitiAssumptions} />
-          {track === "plex" && <PlexNetIncome summary={house.plexUnits} piti={computePiti(
-            { price: house.latestPrice, actualAnnualTax: house.annualTaxAmount }, pitiAssumptions,
+          {track === "plex" && <PlexNetIncome overrideActive={house.purchasePriceOverride != null} summary={house.plexUnits} piti={computePiti(
+            { price: effectivePurchasePrice(house), actualAnnualTax: house.annualTaxAmount }, pitiAssumptions,
           )} />}
           <JudgmentPills judgments={house.judgments} />
         </div>

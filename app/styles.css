@@ -1582,6 +1582,16 @@ a.funnel-row-address:hover {
   font-size: 0.75rem;
 }
 
+.editor-price-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+}
+
 .editor-textarea {
   margin-top: 4px;
   width: 100%;
@@ -1597,6 +1607,7 @@ a.funnel-row-address:hover {
   line-height: 1.5;
 }
 
+.editor-price-input:focus-visible,
 .editor-textarea:focus-visible {
   outline: 2px solid #7950b8;
   outline-offset: 1px;

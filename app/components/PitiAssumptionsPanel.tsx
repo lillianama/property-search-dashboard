@@ -97,7 +97,7 @@ export function PitiAssumptionsPanel({
 
       <div className="piti-panel-body">
         <p className="section-note">
-          Default comparison assumptions: 5% down (95% LTV), 30-year fixed, 7.25% mortgage
+          Default comparison assumptions: 5% down (95% LTV), 30-year fixed, 7.00% mortgage
           note rate (the rate in the payment formula {"\u2014"} not APR, which is a separate disclosure figure and
           never used here), $1,200/yr homeowners insurance, and PMI at 0.36% of the base loan per year {"\u00f7"}{" "}
           12. Everything is editable and saved in this browser only (localStorage) {"\u2014"} nothing is written
@@ -190,7 +190,7 @@ export function PitiAssumptionsPanel({
           className="btn-secondary"
           onClick={() => onChange({ ...DEFAULT_PITI_ASSUMPTIONS })}
         >
-          Reset to comparison defaults (5% down, 30-yr, 7.25% note rate)
+          Reset to comparison defaults (5% down, 30-yr, 7.00% note rate)
         </button>
       </div>
     </details>

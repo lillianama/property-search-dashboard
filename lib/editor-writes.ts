@@ -28,7 +28,7 @@ import { UNKNOWN_JUDGMENTS } from "./types";
 export const EDITOR_WRITE_SOURCE = "dashboard-editor";
 
 export type EditorSaveOutcome =
-  | { ok: true; changedFields: Array<EditorField | JudgmentField>; notes: EditorNotes }
+  | { ok: true; changedFields: Array<EditorField | JudgmentField | "purchasePriceOverride">; notes: EditorNotes }
   | { ok: false; error: "not-found" };
 
 interface CurrentRow {
@@ -165,9 +165,19 @@ export async function executeEditorSave(
       notes.judgments[field] = verdict;
     }
 
+    const priceChanges: Array<"purchasePriceOverride"> = [];
+    if (request.purchasePriceOverride !== undefined) {
+      const currentPrice = await client.query(`SELECT purchase_price FROM property_purchase_price_settings WHERE property_id = $1::uuid ORDER BY saved_at DESC, id DESC LIMIT 1`, [propertyId]);
+      const previous = currentPrice.rows[0]?.purchase_price;
+      if ((previous == null ? null : Number(previous)) !== request.purchasePriceOverride) {
+        await client.query(`INSERT INTO property_purchase_price_settings (property_id, purchase_price, source) VALUES ($1::uuid, $2, $3)`, [propertyId, request.purchasePriceOverride, EDITOR_WRITE_SOURCE]);
+        priceChanges.push("purchasePriceOverride");
+      }
+    }
+
     return {
       ok: true as const,
-      changedFields: [...changedNoteFields, ...changedJudgmentFields],
+      changedFields: [...changedNoteFields, ...changedJudgmentFields, ...priceChanges],
       notes,
     };
   });
